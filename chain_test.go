@@ -5,13 +5,6 @@ import (
 	"testing"
 )
 
-// helper: a one-transaction batch, so tests read clearly.
-func txs(t ...Transaction) []Transaction { return t }
-
-func tx(from, to string, amount uint64, nonce int64) Transaction {
-	return Transaction{From: from, To: to, Amount: amount, Nonce: nonce}
-}
-
 // A fresh chain has exactly the genesis block, at height 0 with no predecessor.
 func TestNewChain(t *testing.T) {
 	c := NewChain()

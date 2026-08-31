@@ -5,35 +5,6 @@ import (
 	"testing"
 )
 
-func block(txs ...Transaction) Block {
-	return Block{Transactions: txs}
-}
-
-// wallet is a test fixture: a key pair plus its derived address.
-// The private key never leaves the test, exactly as in a real system.
-type wallet struct {
-	pub  ed25519.PublicKey
-	priv ed25519.PrivateKey
-	addr string
-}
-
-func newWallet(t *testing.T) wallet {
-	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-	return wallet{pub: pub, priv: priv, addr: deriveAddress(pub)}
-}
-
-// send builds a transaction from this wallet and signs it.
-func (w wallet) send(t *testing.T, to string, amount uint64, nonce int64) Transaction {
-	t.Helper()
-	tx := Transaction{From: w.addr, To: to, Amount: amount, Nonce: nonce}
-	tx.Signature = tx.Sign(w.priv)
-	return tx
-}
-
 // NewState seeds balances from the allocation and leaves nonces empty
 // (a missing nonce reads as 0, which is the correct starting value).
 func TestNewStateSeedsBalances(t *testing.T) {
