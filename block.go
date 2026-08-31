@@ -9,10 +9,21 @@ import (
 )
 
 type Block struct {
-	Transaction  []byte `json:"Transaction"`
-	PreviousHash []byte `json:"PreviousHash"`
-	CreatedAt    int64  `json:"CreatedAt"`
-	Height       int64  `json:"Height"`
+	Transactions []Transaction `json:"Transaction"`
+	PreviousHash []byte        `json:"PreviousHash"`
+	CreatedAt    int64         `json:"CreatedAt"`
+	Height       int64         `json:"Height"`
+}
+
+type Chain struct {
+	Blocks []Block
+}
+
+type Transaction struct {
+	From   string
+	To     string
+	Amount uint64
+	Nonce  int64
 }
 
 func (b Block) Hash() []byte {
@@ -25,13 +36,9 @@ func (b Block) Hash() []byte {
 	return hasher.Sum(nil)
 }
 
-type Chain struct {
-	Blocks []Block
-}
-
 func NewChain() Chain {
 	genesisBlock := Block{
-		Transaction:  []byte{},
+		Transactions: []Transaction{},
 		PreviousHash: []byte{},
 		CreatedAt:    time.Now().Unix(),
 		Height:       0,
@@ -39,13 +46,13 @@ func NewChain() Chain {
 	return Chain{Blocks: []Block{genesisBlock}}
 }
 
-func (c *Chain) AddBlock(tx []byte) {
+func (c *Chain) AddBlock(tx []Transaction) {
 	if len(c.Blocks) == 0 {
 		panic("No Genesis block, use NewChain()")
 	}
 	previousBlock := c.Blocks[len(c.Blocks)-1]
 	newBlock := Block{
-		Transaction:  tx,
+		Transactions: tx,
 		PreviousHash: previousBlock.Hash(),
 		CreatedAt:    time.Now().Unix(),
 		Height:       previousBlock.Height + 1,

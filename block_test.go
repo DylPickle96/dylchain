@@ -5,6 +5,13 @@ import (
 	"testing"
 )
 
+// helper: a one-transaction batch, so tests read clearly.
+func txs(t ...Transaction) []Transaction { return t }
+
+func tx(from, to string, amount uint64, nonce int64) Transaction {
+	return Transaction{From: from, To: to, Amount: amount, Nonce: nonce}
+}
+
 // A fresh chain has exactly the genesis block, at height 0 with no predecessor.
 func TestNewChain(t *testing.T) {
 	c := NewChain()
@@ -24,9 +31,9 @@ func TestNewChain(t *testing.T) {
 // AddBlock links each new block to the hash of the one before it and bumps height by one.
 func TestAddBlockLinksAndHeights(t *testing.T) {
 	c := NewChain()
-	c.AddBlock([]byte("a"))
-	c.AddBlock([]byte("b"))
-	c.AddBlock([]byte("c"))
+	c.AddBlock(txs(tx("alice", "bob", 10, 0)))
+	c.AddBlock(txs(tx("bob", "carol", 5, 0)))
+	c.AddBlock(txs(tx("carol", "alice", 1, 0)))
 
 	if len(c.Blocks) != 4 {
 		t.Fatalf("got %d blocks, want 4 (genesis + 3)", len(c.Blocks))
@@ -46,23 +53,23 @@ func TestAddBlockLinksAndHeights(t *testing.T) {
 // A chain that has only been built through AddBlock is valid.
 func TestValidateCleanChain(t *testing.T) {
 	c := NewChain()
-	c.AddBlock([]byte("a"))
-	c.AddBlock([]byte("b"))
+	c.AddBlock(txs(tx("alice", "bob", 10, 0)))
+	c.AddBlock(txs(tx("bob", "carol", 5, 0)))
 
 	if err := c.Validate(); err != nil {
 		t.Fatalf("clean chain should validate, got error: %v", err)
 	}
 }
 
-// Mutating a block's payload after the fact breaks the link for the NEXT block,
+// Mutating a transaction after the fact breaks the link for the NEXT block,
 // because that next block's PreviousHash was computed from the original contents.
 func TestValidateDetectsTamperedTransaction(t *testing.T) {
 	c := NewChain()
-	c.AddBlock([]byte("a"))
-	c.AddBlock([]byte("b"))
-	c.AddBlock([]byte("c"))
+	c.AddBlock(txs(tx("alice", "bob", 10, 0)))
+	c.AddBlock(txs(tx("bob", "carol", 5, 0)))
+	c.AddBlock(txs(tx("carol", "alice", 1, 0)))
 
-	c.Blocks[1].Transaction = []byte("tampered")
+	c.Blocks[1].Transactions[0].Amount = 999999
 
 	err := c.Validate()
 	if err == nil {
@@ -73,13 +80,13 @@ func TestValidateDetectsTamperedTransaction(t *testing.T) {
 
 // Tampering with the final block is NOT caught by Validate, because no later
 // block links back to it. This is the cost of deriving the hash instead of
-// storing it on the block. Worth locking in so the behavior is intentional.
+// storing it on the block. Locked in so the behavior is intentional.
 func TestValidateDoesNotCatchTamperedTip(t *testing.T) {
 	c := NewChain()
-	c.AddBlock([]byte("a"))
-	c.AddBlock([]byte("b"))
+	c.AddBlock(txs(tx("alice", "bob", 10, 0)))
+	c.AddBlock(txs(tx("bob", "carol", 5, 0)))
 
-	c.Blocks[len(c.Blocks)-1].Transaction = []byte("tampered")
+	c.Blocks[len(c.Blocks)-1].Transactions[0].Amount = 999999
 
 	if err := c.Validate(); err != nil {
 		t.Fatalf("tip tampering is currently undetectable, but Validate returned: %v", err)
@@ -89,8 +96,8 @@ func TestValidateDoesNotCatchTamperedTip(t *testing.T) {
 // Rewriting a block's height is caught by the height-sequence check.
 func TestValidateDetectsBrokenHeightSequence(t *testing.T) {
 	c := NewChain()
-	c.AddBlock([]byte("a"))
-	c.AddBlock([]byte("b"))
+	c.AddBlock(txs(tx("alice", "bob", 10, 0)))
+	c.AddBlock(txs(tx("bob", "carol", 5, 0)))
 
 	c.Blocks[1].Height = 99
 
@@ -109,5 +116,5 @@ func TestAddBlockPanicsWithoutGenesis(t *testing.T) {
 	}()
 
 	var c Chain
-	c.AddBlock([]byte("a"))
+	c.AddBlock(txs(tx("alice", "bob", 1, 0)))
 }
