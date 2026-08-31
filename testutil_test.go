@@ -43,3 +43,11 @@ func (w wallet) send(t *testing.T, to string, amount uint64, nonce int64) Transa
 	txn.Signature = txn.Sign(w.priv)
 	return txn
 }
+
+// mustAdd appends a block and fails the test if it is rejected.
+func mustAdd(t *testing.T, c *Chain, txns ...Transaction) {
+	t.Helper()
+	if err := c.AddBlock(txns); err != nil {
+		t.Fatalf("AddBlock at height %d: %v", len(c.Blocks), err)
+	}
+}

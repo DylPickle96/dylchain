@@ -8,25 +8,29 @@ import (
 
 type Chain struct {
 	Blocks []Block
+	state  State
 }
 
 // NewChain returns a chain containing only its genesis block, so a Chain
 // never exists without one.
-func NewChain() Chain {
+func NewChain(alloc map[string]uint64) Chain {
 	genesisBlock := Block{
 		Transactions: []Transaction{},
 		PreviousHash: []byte{},
 		CreatedAt:    time.Now().Unix(),
 		Height:       0,
 	}
-	return Chain{Blocks: []Block{genesisBlock}}
+	return Chain{
+		Blocks: []Block{genesisBlock},
+		state:  NewState(alloc),
+	}
 }
 
 // AddBlock appends a block carrying tx, linking it to the current tip and
 // incrementing the height. The caller supplies only the payload; the
 // fields that must stay consistent with the rest of the chain are derived
 // here.
-func (c *Chain) AddBlock(tx []Transaction) {
+func (c *Chain) AddBlock(tx []Transaction) error {
 	if len(c.Blocks) == 0 {
 		panic("no genesis block, use NewChain()")
 	}
@@ -37,7 +41,13 @@ func (c *Chain) AddBlock(tx []Transaction) {
 		CreatedAt:    time.Now().Unix(),
 		Height:       previousBlock.Height + 1,
 	}
+	next, err := Apply(c.state, newBlock)
+	if err != nil {
+		return fmt.Errorf("apply block %d: %w", newBlock.Height, err)
+	}
+	c.state = next
 	c.Blocks = append(c.Blocks, newBlock)
+	return nil
 }
 
 // Validate checks, for every adjacent pair of blocks, that the stored
