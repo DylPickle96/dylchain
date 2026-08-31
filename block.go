@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"time"
 )
 
@@ -55,9 +56,7 @@ func NewState(alloc map[string]uint64) State {
 		Balances: make(map[string]uint64, len(alloc)),
 		Nonces:   make(map[string]int64),
 	}
-	for addr, bal := range alloc {
-		s.Balances[addr] = bal
-	}
+	maps.Copy(s.Balances, alloc)
 	return s
 }
 
@@ -92,12 +91,8 @@ func Apply(state State, block Block) (State, error) {
 		Balances: make(map[string]uint64, len(state.Balances)),
 		Nonces:   make(map[string]int64, len(state.Nonces)),
 	}
-	for addr, bal := range state.Balances {
-		next.Balances[addr] = bal
-	}
-	for addr, n := range state.Nonces {
-		next.Nonces[addr] = n
-	}
+	maps.Copy(next.Balances, state.Balances)
+	maps.Copy(next.Nonces, state.Nonces)
 	for i, tx := range block.Transactions {
 		if tx.From == "" {
 			return State{}, fmt.Errorf("tx %d: empty sender", i)
