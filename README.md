@@ -1,10 +1,13 @@
-# blockchain
+# dyl
 
 A toy blockchain built from scratch in Go, as a learning exercise. It is
 built in stages, each one adding a single concept and its tests before the
 next begins. The goal is understanding the mechanics (hashing, account
 state, signatures, Merkle commitments, and eventually BFT consensus), not
 production use.
+
+The native coin is **DYL**. Balances and amounts are counts of its base
+unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 
 ## Status
 
@@ -29,6 +32,7 @@ The package is one Go package split by concern:
 | `transaction.go` | `Transaction`, `Sign`, `merkleRoot` |
 | `state.go` | `State`, `NewState`, `Apply` |
 | `address.go` | address derivation to and from ed25519 keys |
+| `coin.go` | native coin denom, precision, amount formatting |
 | `*_test.go` | tests, with shared fixtures in `testutil_test.go` |
 
 ## Model
@@ -42,9 +46,10 @@ type State struct {
 }
 ```
 
-**Amounts are unsigned integers in the smallest unit.** No floating point
-anywhere in the value path, so balances stay exact. Fractional display
-would be a presentation concern handled at the edge.
+**Amounts are unsigned integers in the smallest unit** (`udyl`). No
+floating point anywhere in the value path, so balances stay exact.
+`FormatAmount` in `coin.go` renders a base-unit count as a `DYL` string
+for display, which is the only place the decimal point appears.
 
 **Addresses are derived from ed25519 public keys.** An address is
 `"dyl" + hex(publicKey)`. The prefix is the toy equivalent of a chain's

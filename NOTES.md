@@ -20,6 +20,11 @@ d813c86  Replace opaque payload with structured transactions  (stage 2)
 
 All tests pass. `gofmt`, `go vet`, `go test ./...` clean.
 
+The package and module are named `dyl`. The native coin is `DYL`, base
+unit `udyl`, precision 6, with `FormatAmount` in `coin.go` for display.
+Minting the coin is stage 7; supply is fixed at the genesis allocation
+until then.
+
 ## The staged plan
 
 | Stage | Concept | State |
