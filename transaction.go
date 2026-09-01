@@ -1,9 +1,11 @@
 package dyl
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 )
 
 type Transaction struct {
@@ -72,10 +74,14 @@ func walkTree(layer [][]byte) [][]byte {
 	if len(layer) <= 1 {
 		return layer
 	}
+	next := nextLayer(layer)
+	return walkTree(next)
+}
+
+func nextLayer(layer [][]byte) [][]byte {
 	if len(layer)%2 != 0 {
 		layer = append(layer, layer[len(layer)-1])
 	}
-
 	next := make([][]byte, 0, len(layer)/2)
 	for i := 0; i < len(layer); i += 2 {
 		h := sha256.New()
@@ -84,5 +90,56 @@ func walkTree(layer [][]byte) [][]byte {
 		h.Write(layer[i+1])
 		next = append(next, h.Sum(nil))
 	}
-	return walkTree(next)
+	return next
+}
+
+func merkleProof(txs []Transaction, index int) ([][]byte, error) {
+	if len(txs) == 0 {
+		return nil, fmt.Errorf("transactions length is zero")
+	}
+	if index < 0 || index >= len(txs) {
+		return nil, fmt.Errorf("bad index for merkleProof")
+	}
+	layer := make([][]byte, 0)
+	for _, tx := range txs {
+		data, err := json.Marshal(tx)
+		if err != nil {
+			panic(err) // these field types cannot produce a marshal error
+		}
+		h := sha256.New()
+		h.Write([]byte{merkleLeafPrefix})
+		h.Write(data)
+		layer = append(layer, h.Sum(nil))
+	}
+	proofs := make([][]byte, 0)
+	for len(layer) > 1 {
+		if len(layer)%2 != 0 && index == len(layer)-1 {
+			proofs = append(proofs, layer[index])
+		} else if index%2 == 0 {
+			proofs = append(proofs, layer[index+1])
+		} else {
+			proofs = append(proofs, layer[index-1])
+		}
+		layer = nextLayer(layer)
+		index = index / 2
+	}
+	return proofs, nil
+}
+
+func verifyMerkleProof(leafHash []byte, index int, proof [][]byte, root []byte) bool {
+	current := leafHash
+	for _, sibling := range proof {
+		h := sha256.New()
+		h.Write([]byte{merkleNodePrefix})
+		if index%2 == 0 {
+			h.Write(current)
+			h.Write(sibling)
+		} else {
+			h.Write(sibling)
+			h.Write(current)
+		}
+		current = h.Sum(nil)
+		index /= 2
+	}
+	return bytes.Equal(current, root)
 }

@@ -17,7 +17,7 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 | 2 | Structured transactions | done |
 | 3 | Account state and block application | done |
 | 4 | ed25519 transaction signatures | done |
-| 5 | Merkle root over a block's transactions | done |
+| 5 | Merkle root and inclusion proofs | done |
 | 6 | Multiple validators (BFT consensus) | not started |
 | 7 | Slashing and minting | not started |
 
@@ -29,7 +29,7 @@ The package is one Go package split by concern:
 |------|----------|
 | `block.go` | `Block`, `Block.Hash` |
 | `chain.go` | `Chain`, `NewChain`, `AddBlock`, `Validate` |
-| `transaction.go` | `Transaction`, `Sign`, `merkleRoot` |
+| `transaction.go` | `Transaction`, `Sign`, Merkle root and proofs |
 | `state.go` | `State`, `NewState`, `Apply` |
 | `address.go` | address derivation to and from ed25519 keys |
 | `coin.go` | native coin denom, precision, amount formatting |
@@ -68,6 +68,14 @@ nodes) and duplicate-last padding for odd layers. `Block.Hash` covers the
 block header, including `TxRoot`, not the raw transaction slice. An empty
 block has an all-zero root.
 
+A full node already has every transaction, so `AddBlock` and `Validate`
+only recompute the root. `merkleProof` / `verifyMerkleProof` let a light
+client check that one transaction is in a block from the leaf hash, a
+sibling path, and `TxRoot`, without the rest of the body. They are
+unexported until something outside this package needs them. Odd layers
+put a copy of the last node into the proof as its sibling, so verify
+orders hashes by index parity and does not need the leaf count.
+
 ## How a block is added
 
 `AddBlock` is the single entry point. The caller supplies only the
@@ -91,7 +99,8 @@ one.
 `Chain.Validate` checks two kinds of invariant:
 
 - **Per block:** `TxRoot` equals a fresh recompute of the Merkle root, so
-  the transaction body cannot be swapped under a valid header.
+  the transaction body cannot be swapped under a valid header. This is the
+  full-node check, not an inclusion proof.
 - **Per adjacent pair:** the stored `PreviousHash` matches a recompute of
   the earlier block, and the height increases by exactly one.
 

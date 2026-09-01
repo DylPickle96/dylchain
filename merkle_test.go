@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -129,5 +130,143 @@ func TestMerkleRootDeterministic(t *testing.T) {
 
 	if !bytes.Equal(merkleRoot(txs), merkleRoot(txs)) {
 		t.Error("merkleRoot is not deterministic for the same input")
+	}
+}
+
+func numberedTxs(n int) []Transaction {
+	out := make([]Transaction, n)
+	for i := 0; i < n; i++ {
+		out[i] = tx("alice", "bob", uint64(i+1), int64(i))
+	}
+	return out
+}
+
+func TestMerkleProofEmpty(t *testing.T) {
+	if _, err := merkleProof(nil, 0); err == nil {
+		t.Error("empty txs: expected error")
+	}
+	if _, err := merkleProof([]Transaction{}, 0); err == nil {
+		t.Error("zero-length txs: expected error")
+	}
+}
+
+func TestMerkleProofBadIndex(t *testing.T) {
+	txs := numberedTxs(2)
+	for _, index := range []int{-1, 2, 3} {
+		if _, err := merkleProof(txs, index); err == nil {
+			t.Errorf("index %d: expected error", index)
+		}
+	}
+}
+
+func TestMerkleProofSingleEmpty(t *testing.T) {
+	a := tx("alice", "bob", 10, 0)
+	proof, err := merkleProof([]Transaction{a}, 0)
+	if err != nil {
+		t.Fatalf("merkleProof: %v", err)
+	}
+	if len(proof) != 0 {
+		t.Errorf("single-tx proof: got %d siblings, want none", len(proof))
+	}
+	if !verifyMerkleProof(leafHash(t, a), 0, proof, merkleRoot([]Transaction{a})) {
+		t.Error("empty proof should verify against the leaf root")
+	}
+}
+
+// Three leaves, last index: sibling is the leaf itself, then AB.
+func TestMerkleProofOddLastKnownValue(t *testing.T) {
+	a := tx("alice", "bob", 10, 0)
+	b := tx("bob", "carol", 5, 0)
+	c := tx("carol", "alice", 1, 0)
+	txs := []Transaction{a, b, c}
+
+	proof, err := merkleProof(txs, 2)
+	if err != nil {
+		t.Fatalf("merkleProof: %v", err)
+	}
+	la, lb, lc := leafHash(t, a), leafHash(t, b), leafHash(t, c)
+	want := [][]byte{lc, nodeHash(la, lb)}
+	if len(proof) != len(want) {
+		t.Fatalf("proof length: got %d, want %d", len(proof), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(proof[i], want[i]) {
+			t.Errorf("proof[%d]: got %x, want %x", i, proof[i], want[i])
+		}
+	}
+}
+
+func TestMerkleProofVerifiesEveryIndex(t *testing.T) {
+	for n := 1; n <= 5; n++ {
+		txs := numberedTxs(n)
+		root := merkleRoot(txs)
+		t.Run(fmt.Sprintf("%d txs", n), func(t *testing.T) {
+			for i := range txs {
+				proof, err := merkleProof(txs, i)
+				if err != nil {
+					t.Fatalf("index %d: %v", i, err)
+				}
+				if !verifyMerkleProof(leafHash(t, txs[i]), i, proof, root) {
+					t.Errorf("index %d: proof did not verify", i)
+				}
+			}
+		})
+	}
+}
+
+func TestMerkleProofAlteredSiblingFails(t *testing.T) {
+	txs := numberedTxs(4)
+	proof, err := merkleProof(txs, 1)
+	if err != nil {
+		t.Fatalf("merkleProof: %v", err)
+	}
+	if len(proof) == 0 {
+		t.Fatal("expected at least one sibling")
+	}
+	proof[0] = bytes.Clone(proof[0])
+	proof[0][0] ^= 1
+	if verifyMerkleProof(leafHash(t, txs[1]), 1, proof, merkleRoot(txs)) {
+		t.Error("proof with an altered sibling verified")
+	}
+}
+
+func TestMerkleProofWrongRootFails(t *testing.T) {
+	txs := numberedTxs(3)
+	proof, err := merkleProof(txs, 0)
+	if err != nil {
+		t.Fatalf("merkleProof: %v", err)
+	}
+	wrong := bytes.Clone(merkleRoot(txs))
+	wrong[0] ^= 1
+	if verifyMerkleProof(leafHash(t, txs[0]), 0, proof, wrong) {
+		t.Error("proof verified against a wrong root")
+	}
+}
+
+func TestMerkleProofWrongIndexFails(t *testing.T) {
+	txs := numberedTxs(4)
+	proof, err := merkleProof(txs, 1)
+	if err != nil {
+		t.Fatalf("merkleProof: %v", err)
+	}
+	if verifyMerkleProof(leafHash(t, txs[1]), 0, proof, merkleRoot(txs)) {
+		t.Error("proof for index 1 verified when checked as index 0")
+	}
+}
+
+func TestMerkleProofAgainstBlockTxRoot(t *testing.T) {
+	txs := numberedTxs(5)
+	b := Block{
+		Transactions: txs,
+		TxRoot:       merkleRoot(txs),
+	}
+	for i := range b.Transactions {
+		proof, err := merkleProof(b.Transactions, i)
+		if err != nil {
+			t.Fatalf("index %d: %v", i, err)
+		}
+		if !verifyMerkleProof(leafHash(t, b.Transactions[i]), i, proof, b.TxRoot) {
+			t.Errorf("index %d: proof did not match Block.TxRoot", i)
+		}
 	}
 }

@@ -4,21 +4,17 @@ Context for resuming work. Not user-facing (see `README.md` for that).
 
 ## Where we are
 
-Stages 1 to 5 are done and committed. Eight commits, ending at "Commit
-transactions with a Merkle root", plus the README and this file.
+Stages 1 to 5 are done, including Merkle inclusion proofs (the leftover
+from the original stage 5 commit). Last committed tip before this work:
 
 ```
-2a1c1a5  Commit transactions with a Merkle root      (stage 5)
-fb05116  Apply transactions to state when a block is added
-ac9c722  Restructure package into per-concern files
-61c5829  Add ed25519 signatures to transactions       (stage 4)
-532fffe  Use maps.Copy for the state map copies
-af860a8  Add account state and block application       (stage 3)
-d813c86  Replace opaque payload with structured transactions  (stage 2)
-048f572  Add block hashing and a validated chain       (stage 1)
+a790da6  Name the chain dyl and add the DYL coin
+d9effdc  Add working notes for resuming development
+d4daad7  Add README
+2a1c1a5  Commit transactions with a Merkle root      (stage 5 root)
 ```
 
-All tests pass. `gofmt`, `go vet`, `go test ./...` clean.
+`gofmt`, `go vet`, `go test ./...` clean after the proof work.
 
 The package and module are named `dyl`. The native coin is `DYL`, base
 unit `udyl`, precision 6, with `FormatAmount` in `coin.go` for display.
@@ -33,68 +29,38 @@ until then.
 | 2 | Structured transactions | done |
 | 3 | Account state, `Apply` | done |
 | 4 | ed25519 signatures | done |
-| 5 | Merkle root over transactions | done |
+| 5 | Merkle root and inclusion proofs | done |
 | 6 | Multiple validators (BFT) | next |
 | 7 | Slashing and minting | after 6 |
 
-There is also an unfinished piece of stage 5: **Merkle inclusion proofs**.
-That is the smallest next task and a good downtime one. Details below.
+## Merkle proofs (done)
 
-## Immediate next task: Merkle proofs
-
-The tree is built but you cannot yet prove a single transaction is in a
-block without the whole block. That is the point of a Merkle tree and what
-a light client uses.
-
-Functions to add (in `transaction.go` or a new `merkle.go`):
+In `transaction.go`, unexported. The chain does not call them: it is a
+full node and already has every transaction, so `AddBlock` / `Validate`
+only recompute `merkleRoot`. Proofs are for a future light client.
 
 ```go
-// sibling hashes along the path from leaf `index` up to the root
 func merkleProof(txs []Transaction, index int) ([][]byte, error)
-
-// recompute the root from a leaf + its path and check it matches
-func verifyMerkleProof(leafHash []byte, index, leafCount int, proof [][]byte, root []byte) bool
+func verifyMerkleProof(leafHash []byte, index int, proof [][]byte, root []byte) bool
 ```
 
-### merkleProof
+`merkleRoot` and `merkleProof` share `nextLayer` (odd layer duplicates
+the last node, then pairs with `0x01`). Proof generation records the
+sibling at the tracked index, including a copy of yourself when you are
+last in an odd layer, then `index /= 2` until one node remains.
 
-Rebuild the tree level by level like `walkTree`, tracking one position:
+Verify starts at `leafHash` (`0x00` already applied). For each sibling:
+even index `H(0x01 || current || sibling)`, odd `H(0x01 || sibling ||
+current)`, then `index /= 2`. Empty proof (one tx): `leafHash` must equal
+`root`.
 
-- if the tracked index is even, the sibling is at `index+1`; if odd, at
-  `index-1`
-- append that sibling hash to the proof
-- move up: `index /= 2`
-- stop when the level has one node
+**No `leafCount` on verify.** That parameter is for a proof that *omits*
+self-hashes, so the verifier must recreate odd layers from the leaf
+count. This prover *stores* the self-hash as a normal sibling, so
+parity plus `index /= 2` is enough. Do not mix the two encodings.
 
-### verifyMerkleProof
-
-Start from `leafHash`. For each sibling in the proof:
-
-- current index even: `H(0x01 || current || sibling)` (you are on the left)
-- current index odd: `H(0x01 || sibling || current)` (you are on the right)
-- `index /= 2`
-
-After all siblings are consumed, compare to `root`.
-
-### Decision points
-
-- Left/right ordering must match how the tree was built. Index parity is
-  what tells you which side you are on. Getting it backwards gives a
-  valid-looking but wrong root.
-- The odd-layer duplicate-last rule has to be reproduced on both sides. If
-  you are the last node in an odd layer, your sibling is yourself. This is
-  why `verify` takes `leafCount`: it needs to know when a layer was odd.
-- Domain separation matches the builder: `0x00` for the starting leaf,
-  `0x01` for every combine step.
-- Single-transaction tree: empty proof, root is the leaf hash.
-
-### Tests
-
-- proof verifies for every index of a 1, 2, 3, 4, 5 transaction block
-- a proof with one sibling altered fails
-- a proof verified against the wrong root fails
-- a proof for the wrong index fails
-- round trip against a real `Block.TxRoot`
+Tests live in `merkle_test.go` next to the package (idiomatic Go: not a
+separate `test/` directory, so they can call unexported helpers).
 
 ## Stage 6: multiple validators (BFT)
 
@@ -144,6 +110,9 @@ Things this forces that are currently deferred:
   and recomputing its `TxRoot` passes `Validate`, because nothing links to
   the tip's hash. Closes when consensus signs blocks. Documented in a test
   (`TestValidateDoesNotCatchConsistentTipRewrite`).
+- **Export `MerkleProof` / `VerifyMerkleProof`** when another package is
+  actually a light client. Until then they stay unexported like
+  `merkleRoot`.
 
 ## How we have been working
 
@@ -153,3 +122,4 @@ Things this forces that are currently deferred:
 - `gofmt` + `go vet` + `go test ./...` before every commit.
 - Commit messages: plain, no co-author line, no em dashes or semicolons.
 - Account model, integer amounts, standard library only.
+- Unit tests stay in `*_test.go` beside the code, `package dyl`.
