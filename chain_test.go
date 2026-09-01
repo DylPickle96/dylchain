@@ -120,10 +120,9 @@ func TestValidateDetectsTamperedTransaction(t *testing.T) {
 	t.Logf("got expected error: %v", err)
 }
 
-// Tampering with the final block is NOT caught by Validate, because no later
-// block links back to it. This is the cost of deriving the hash instead of
-// storing it on the block. Locked in so the behavior is intentional.
-func TestValidateDoesNotCatchTamperedTip(t *testing.T) {
+// Changing a transaction in the final block is caught by the per-block
+// TxRoot check, even though nothing links back to the tip's hash.
+func TestValidateDetectsTamperedTipTransaction(t *testing.T) {
 	alice := newWallet(t)
 	bob := newWallet(t)
 	c := NewChain(map[string]uint64{alice.addr: 1000})
@@ -133,8 +132,29 @@ func TestValidateDoesNotCatchTamperedTip(t *testing.T) {
 
 	c.Blocks[len(c.Blocks)-1].Transactions[0].Amount = 999999
 
+	if err := c.Validate(); err == nil {
+		t.Fatal("tampered tip transaction should not validate, got nil error")
+	}
+}
+
+// A *consistent* rewrite of the tip (transaction changed AND TxRoot
+// recomputed to match) is still NOT caught, because no later block links
+// to the tip's hash. This is the residual cost of deriving the block hash
+// rather than storing it, and it closes once consensus signs blocks.
+func TestValidateDoesNotCatchConsistentTipRewrite(t *testing.T) {
+	alice := newWallet(t)
+	bob := newWallet(t)
+	c := NewChain(map[string]uint64{alice.addr: 1000})
+
+	mustAdd(t, &c, alice.send(t, bob.addr, 10, 0))
+	mustAdd(t, &c, alice.send(t, bob.addr, 5, 1))
+
+	tip := &c.Blocks[len(c.Blocks)-1]
+	tip.Transactions[0].Amount = 999999
+	tip.TxRoot = merkleRoot(tip.Transactions)
+
 	if err := c.Validate(); err != nil {
-		t.Fatalf("tip tampering is currently undetectable, but Validate returned: %v", err)
+		t.Fatalf("consistent tip rewrite is undetectable, but Validate returned: %v", err)
 	}
 }
 

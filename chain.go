@@ -16,6 +16,7 @@ type Chain struct {
 func NewChain(alloc map[string]uint64) Chain {
 	genesisBlock := Block{
 		Transactions: []Transaction{},
+		TxRoot:       merkleRoot(nil),
 		PreviousHash: []byte{},
 		CreatedAt:    time.Now().Unix(),
 		Height:       0,
@@ -37,6 +38,7 @@ func (c *Chain) AddBlock(tx []Transaction) error {
 	previousBlock := c.Blocks[len(c.Blocks)-1]
 	newBlock := Block{
 		Transactions: tx,
+		TxRoot:       merkleRoot(tx),
 		PreviousHash: previousBlock.Hash(),
 		CreatedAt:    time.Now().Unix(),
 		Height:       previousBlock.Height + 1,
@@ -54,6 +56,13 @@ func (c *Chain) AddBlock(tx []Transaction) error {
 // previous-hash matches a recompute of the earlier block and that the
 // height increases by exactly one.
 func (c *Chain) Validate() error {
+	// Per block: the transaction body matches the root in the header.
+	for i, b := range c.Blocks {
+		if !bytes.Equal(b.TxRoot, merkleRoot(b.Transactions)) {
+			return fmt.Errorf("block %d: TxRoot does not match the Merkle root of its transactions", i)
+		}
+	}
+	// Per adjacent pair: the hash links and the height increments by one.
 	for i := 0; i < len(c.Blocks)-1; i++ {
 		if !bytes.Equal(c.Blocks[i].Hash(), c.Blocks[i+1].PreviousHash) {
 			return fmt.Errorf("block %d: PreviousHash does not match hash of block %d", i+1, i)

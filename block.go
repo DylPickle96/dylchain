@@ -7,6 +7,7 @@ import (
 
 type Block struct {
 	Transactions []Transaction `json:"Transactions"`
+	TxRoot       []byte        `json:"TxRoot"`
 	PreviousHash []byte        `json:"PreviousHash"`
 	CreatedAt    int64         `json:"CreatedAt"`
 	Height       int64         `json:"Height"`
@@ -16,8 +17,14 @@ type Block struct {
 // derived on demand rather than stored, so any change to a block's
 // contents changes its hash.
 func (b Block) Hash() []byte {
+	block := Block{
+		TxRoot:       b.TxRoot,
+		PreviousHash: b.PreviousHash,
+		CreatedAt:    b.CreatedAt,
+		Height:       b.Height,
+	}
 	hasher := sha256.New()
-	data, err := json.Marshal(b)
+	data, err := json.Marshal(block)
 	if err != nil {
 		panic(err) // these field types cannot produce a marshal error
 	}
