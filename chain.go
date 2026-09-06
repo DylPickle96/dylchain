@@ -14,17 +14,19 @@ type Chain struct {
 // NewChain returns a chain containing only its genesis block, so a Chain
 // never exists without one.
 func NewChain(alloc map[string]uint64) Chain {
-	genesisBlock := Block{
-		Transactions: []Transaction{},
-		TxRoot:       merkleRoot(nil),
-		PreviousHash: []byte{},
-		CreatedAt:    time.Now().Unix(),
-		Height:       0,
+	chain, err := newChainFromGenesis(genesisBlock(alloc))
+	if err != nil {
+		panic(fmt.Sprintf("invalid genesis: %v", err))
 	}
-	return Chain{
-		Blocks: []Block{genesisBlock},
-		state:  NewState(alloc),
+	return chain
+}
+
+func newChainFromGenesis(genesis Block) (Chain, error) {
+	state, err := ReplayBlocks([]Block{genesis})
+	if err != nil {
+		return Chain{}, err
 	}
+	return Chain{Blocks: []Block{genesis}, state: state}, nil
 }
 
 // AddBlock appends a block carrying tx, linking it to the current tip and

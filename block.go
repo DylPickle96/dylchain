@@ -3,14 +3,16 @@ package dyl
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"time"
 )
 
 type Block struct {
-	Transactions []Transaction `json:"Transactions"`
-	TxRoot       []byte        `json:"TxRoot"`
-	PreviousHash []byte        `json:"PreviousHash"`
-	CreatedAt    int64         `json:"CreatedAt"`
-	Height       int64         `json:"Height"`
+	Transactions []Transaction     `json:"Transactions"`
+	TxRoot       []byte            `json:"TxRoot"`
+	PreviousHash []byte            `json:"PreviousHash"`
+	CreatedAt    int64             `json:"CreatedAt"`
+	Height       int64             `json:"Height"`
+	Alloc        map[string]uint64 `json:"Alloc,omitempty"`
 }
 
 // Hash is the SHA-256 digest of the block's JSON serialisation. It is
@@ -22,6 +24,7 @@ func (b Block) Hash() []byte {
 		PreviousHash: b.PreviousHash,
 		CreatedAt:    b.CreatedAt,
 		Height:       b.Height,
+		Alloc:        b.Alloc,
 	}
 	hasher := sha256.New()
 	data, err := json.Marshal(block)
@@ -30,4 +33,15 @@ func (b Block) Hash() []byte {
 	}
 	hasher.Write(data)
 	return hasher.Sum(nil)
+}
+
+func genesisBlock(alloc map[string]uint64) Block {
+	return Block{
+		Transactions: []Transaction{},
+		TxRoot:       merkleRoot(nil),
+		PreviousHash: []byte{},
+		Alloc:        alloc,
+		CreatedAt:    time.Now().Unix(),
+		Height:       0,
+	}
 }

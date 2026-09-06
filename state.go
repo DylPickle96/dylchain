@@ -75,3 +75,24 @@ func Apply(state State, block Block) (State, error) {
 	}
 	return next, nil
 }
+
+func ReplayBlocks(blocks []Block) (State, error) {
+	if len(blocks) == 0 {
+		return State{}, fmt.Errorf("block length cannot be zero")
+	}
+	if blocks[0].Height != 0 {
+		return State{}, fmt.Errorf("genesis block height must be zero")
+	}
+	if len(blocks[0].Transactions) != 0 {
+		return State{}, fmt.Errorf("genesis block carries transactions")
+	}
+	state := NewState(blocks[0].Alloc)
+	for _, block := range blocks[1:] {
+		next, err := Apply(state, block)
+		if err != nil {
+			return State{}, err
+		}
+		state = next
+	}
+	return state, nil
+}

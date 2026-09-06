@@ -2,6 +2,7 @@ package dyl
 
 import (
 	"bytes"
+	"maps"
 	"testing"
 )
 
@@ -155,6 +156,41 @@ func TestValidateDoesNotCatchConsistentTipRewrite(t *testing.T) {
 
 	if err := c.Validate(); err != nil {
 		t.Fatalf("consistent tip rewrite is undetectable, but Validate returned: %v", err)
+	}
+}
+
+// ReplayBlocks rebuilds exactly the ledger a live chain holds.
+func TestReplayBlocksMatchesLiveState(t *testing.T) {
+	alice := newWallet(t)
+	bob := newWallet(t)
+	c := NewChain(map[string]uint64{alice.addr: 1000})
+
+	mustAdd(t, &c, alice.send(t, bob.addr, 100, 0))
+	mustAdd(t, &c, alice.send(t, bob.addr, 50, 1))
+	mustAdd(t, &c, bob.send(t, alice.addr, 20, 0))
+
+	replayed, err := ReplayBlocks(c.Blocks)
+	if err != nil {
+		t.Fatalf("ReplayBlocks: %v", err)
+	}
+	if !maps.Equal(replayed.Balances, c.state.Balances) {
+		t.Errorf("replayed balances %v, want %v", replayed.Balances, c.state.Balances)
+	}
+	if !maps.Equal(replayed.Nonces, c.state.Nonces) {
+		t.Errorf("replayed nonces %v, want %v", replayed.Nonces, c.state.Nonces)
+	}
+}
+
+// ReplayBlocks rejects a block list that does not start with a genesis
+// block.
+func TestReplayBlocksRejectsBadGenesis(t *testing.T) {
+	if _, err := ReplayBlocks(nil); err == nil {
+		t.Error("empty block list should be rejected")
+	}
+
+	notGenesis := []Block{{Height: 1}}
+	if _, err := ReplayBlocks(notGenesis); err == nil {
+		t.Error("first block at height 1 should be rejected")
 	}
 }
 
