@@ -3,6 +3,7 @@ package dyl
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"time"
 )
 
@@ -73,5 +74,16 @@ func (c *Chain) Validate() error {
 			return fmt.Errorf("block %d: height is %d, expected %d", i+1, c.Blocks[i+1].Height, c.Blocks[i].Height+1)
 		}
 	}
+	state, err := ReplayBlocks(c.Blocks)
+	if err != nil {
+		return fmt.Errorf("chain state does not replay from genesis: %w", err)
+	}
+	if !maps.Equal(state.Balances, c.state.Balances) {
+		return fmt.Errorf("replayed balances do not match chain state")
+	}
+	if !maps.Equal(state.Nonces, c.state.Nonces) {
+		return fmt.Errorf("replayed nonces do not match chain state")
+	}
 	return nil
+
 }

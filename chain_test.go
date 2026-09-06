@@ -139,10 +139,12 @@ func TestValidateDetectsTamperedTipTransaction(t *testing.T) {
 }
 
 // A *consistent* rewrite of the tip (transaction changed AND TxRoot
-// recomputed to match) is still NOT caught, because no later block links
-// to the tip's hash. This is the residual cost of deriving the block hash
-// rather than storing it, and it closes once consensus signs blocks.
-func TestValidateDoesNotCatchConsistentTipRewrite(t *testing.T) {
+// recomputed to match) used to slip past Validate, because nothing links to
+// the tip's hash. Replaying state from genesis now catches it: the altered
+// transaction no longer matches its own signature. The new amount stays
+// within alice's balance, so it is the signature check, not an overdraft,
+// that fails.
+func TestValidateCatchesConsistentTipRewrite(t *testing.T) {
 	alice := newWallet(t)
 	bob := newWallet(t)
 	c := NewChain(map[string]uint64{alice.addr: 1000})
@@ -151,11 +153,30 @@ func TestValidateDoesNotCatchConsistentTipRewrite(t *testing.T) {
 	mustAdd(t, &c, alice.send(t, bob.addr, 5, 1))
 
 	tip := &c.Blocks[len(c.Blocks)-1]
-	tip.Transactions[0].Amount = 999999
+	tip.Transactions[0].Amount = 900
 	tip.TxRoot = merkleRoot(tip.Transactions)
 
-	if err := c.Validate(); err != nil {
-		t.Fatalf("consistent tip rewrite is undetectable, but Validate returned: %v", err)
+	if err := c.Validate(); err == nil {
+		t.Fatal("consistent tip rewrite should fail replay, got nil error")
+	}
+}
+
+// Validate replays the whole chain and compares the result to the chain's
+// own state, so state that has drifted from the blocks is caught even when
+// every block is individually well formed.
+func TestValidateCatchesStateDrift(t *testing.T) {
+	alice := newWallet(t)
+	bob := newWallet(t)
+	c := NewChain(map[string]uint64{alice.addr: 1000})
+
+	mustAdd(t, &c, alice.send(t, bob.addr, 10, 0))
+	mustAdd(t, &c, alice.send(t, bob.addr, 5, 1))
+
+	// Corrupt the in-memory ledger without touching any block.
+	c.state.Balances[alice.addr] += 1000
+
+	if err := c.Validate(); err == nil {
+		t.Fatal("state that disagrees with the blocks should not validate, got nil error")
 	}
 }
 
