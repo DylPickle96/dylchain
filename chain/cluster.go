@@ -132,8 +132,7 @@ func (c *Cluster) Submit(tx Transaction) error {
 	if !ed25519.Verify(pub, tx.signableBytes(), tx.Signature) {
 		return fmt.Errorf("invalid signature")
 	}
-	c.mempool.Add(tx)
-	return nil
+	return c.mempool.Add(tx)
 }
 
 // Run drives every validator through the given number of heights, one

@@ -92,6 +92,52 @@ func TestServerEndpoints(t *testing.T) {
 	}, "validator 3 never slashed")
 }
 
+// The token bucket allows a burst, then denies, then recovers as tokens
+// refill.
+func TestLimiter(t *testing.T) {
+	l := newLimiter(5, 3)
+	for i := 0; i < 3; i++ {
+		if !l.allow() {
+			t.Fatalf("burst token %d denied", i)
+		}
+	}
+	if l.allow() {
+		t.Error("call past the burst was allowed")
+	}
+	time.Sleep(300 * time.Millisecond) // ~1.5 tokens back
+	if !l.allow() {
+		t.Error("no token after refill")
+	}
+}
+
+// A burst of writes eventually gets a 429, and faulting validators past the
+// budget gets a 409 so consensus can always still reach two thirds.
+func TestWriteLimitsAndFaultBudget(t *testing.T) {
+	s := newServer(6)
+	ts := httptest.NewServer(s.routes())
+	t.Cleanup(ts.Close)
+
+	got429 := false
+	for i := 0; i < 100 && !got429; i++ {
+		if postJSON(t, ts.URL+"/faucet", map[string]string{"address": newWallet().addr}) == http.StatusTooManyRequests {
+			got429 = true
+		}
+	}
+	if !got429 {
+		t.Error("write rate limiter never returned 429 under a burst")
+	}
+
+	got409 := false
+	for i := 0; i < s.cluster.Size() && !got409; i++ {
+		if postJSON(t, ts.URL+"/fault", map[string]int{"index": i}) == http.StatusConflict {
+			got409 = true
+		}
+	}
+	if !got409 {
+		t.Error("fault budget never refused")
+	}
+}
+
 func waitFor(t *testing.T, d time.Duration, cond func() bool, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(d)

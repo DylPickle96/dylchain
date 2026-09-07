@@ -1,6 +1,16 @@
 package chain
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
+
+// maxMempool caps how many transactions may wait at once, so a flood of
+// valid submissions cannot grow the queue without bound.
+const maxMempool = 10_000
+
+// ErrMempoolFull is returned by Add when the queue is at maxMempool.
+var ErrMempoolFull = errors.New("mempool full")
 
 // Mempool is the queue of pending transactions shared by the validators in
 // a Cluster. It does no validation of its own: a proposer drains
@@ -16,11 +26,16 @@ func NewMempool() *Mempool {
 	return &Mempool{}
 }
 
-// Add appends a transaction to the back of the queue.
-func (m *Mempool) Add(tx Transaction) {
+// Add appends a transaction to the back of the queue, or returns
+// ErrMempoolFull if the queue is already at capacity.
+func (m *Mempool) Add(tx Transaction) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if len(m.txs) >= maxMempool {
+		return ErrMempoolFull
+	}
 	m.txs = append(m.txs, tx)
+	return nil
 }
 
 // Len is the number of queued transactions.

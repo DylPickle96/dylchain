@@ -300,6 +300,26 @@ live cluster.
 Config: `-validators` (20), `-addr` (:8080), `-block-time` (1s),
 `-tx-every` (2s).
 
+### Abuse limits
+
+The endpoint is meant to be pointed at the public internet on a cheap
+host, so a stranger must not be able to spend the compute budget.
+
+- `-validators` is a flag, not a request parameter, and must stay that
+  way: cluster cost is `O(n^2)` verifications per height.
+- `maxBlockTxs` is 64, so proposer work per block is bounded no matter how
+  big the mempool grows. The mempool itself caps at 10000
+  (`chain.ErrMempoolFull`, a 429).
+- `/tx` and `/faucet` share a token bucket (5/s, burst 20; 429 past it).
+  `/faucet` also keeps its per-address 30s limit.
+- `/fault` refuses (409) once faulty-plus-slashed stake would reach a
+  third of the original total, so the honest set can always still make two
+  thirds and the demo recovers.
+- `/events` caps at 512 concurrent streams (503 past it).
+- `http.Server` has `ReadHeaderTimeout` and `IdleTimeout` (no
+  `WriteTimeout`, it would cut the SSE stream); POST bodies are capped at
+  16 KiB with `http.MaxBytesReader`.
+
 ## Stage 9: explorer UI
 
 React + Vite, a separate frontend project, talks to the stage 8 server.

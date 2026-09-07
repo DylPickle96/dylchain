@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -24,6 +25,9 @@ import (
 
 func main() {
 	var (
+		// validators is operator-only. Cluster cost is O(n^2) signature
+		// verifications per height, so this must never become
+		// request-controlled.
 		validators = flag.Int("validators", 20, "number of validators")
 		addr       = flag.String("addr", ":8080", "HTTP listen address")
 		blockTime  = flag.Duration("block-time", time.Second, "minimum time between blocks")
@@ -40,7 +44,13 @@ func main() {
 	go srv.cluster.RunContext(ctx)
 	go srv.drive(ctx, *txEvery)
 
-	httpSrv := &http.Server{Addr: *addr, Handler: srv.routes()}
+	httpSrv := &http.Server{
+		Addr:              *addr,
+		Handler:           srv.routes(),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		// no WriteTimeout: it would cut off the /events stream
+	}
 	go func() {
 		log.Printf("dyld listening on %s with %d validators", *addr, *validators)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -70,15 +80,26 @@ func newWallet() wallet {
 	return wallet{priv: priv, addr: chain.AddressFromKey(pub)}
 }
 
+const (
+	maxBlockTxs = 64  // cap proposer work per block regardless of mempool size
+	maxViewers  = 512 // concurrent /events streams
+)
+
 type server struct {
 	cluster  *chain.Cluster
 	faucet   wallet
 	accounts map[string]wallet // name -> wallet, the demo recipients
+	writes   *limiter          // rate limit for /tx and /faucet
+	viewers  atomic.Int64      // live /events connections
+
+	origStake []uint64 // per-validator stake at genesis, for the fault budget
+	origTotal uint64
 
 	mu         sync.Mutex
 	nonces     map[string]int64    // server-held wallets: next nonce to use
 	seen       map[string]struct{} // addresses observed via /tx and /faucet
 	lastFaucet map[string]time.Time
+	faulty     map[int]bool // validators MakeFaulty has been called on
 }
 
 func newServer(n int) *server {
@@ -88,9 +109,11 @@ func newServer(n int) *server {
 	s := &server{
 		faucet:     newWallet(),
 		accounts:   map[string]wallet{},
+		writes:     newLimiter(5, 20), // 5/s, burst 20, shared across /tx and /faucet
 		nonces:     map[string]int64{},
 		seen:       map[string]struct{}{},
 		lastFaucet: map[string]time.Time{},
+		faulty:     map[int]bool{},
 	}
 
 	alloc := map[string]uint64{
@@ -103,8 +126,45 @@ func newServer(n int) *server {
 	}
 
 	set := chain.NewValidatorSet(chain.GenerateValidators(n)...)
-	s.cluster = chain.NewCluster(alloc, set, 0)
+	s.cluster = chain.NewCluster(alloc, set, maxBlockTxs)
+
+	genesis := s.cluster.Snapshot() // stakes here are pre-slash originals
+	s.origStake = make([]uint64, len(genesis.Validators))
+	for i, v := range genesis.Validators {
+		s.origStake[i] = v.Stake
+		s.origTotal += v.Stake
+	}
 	return s
+}
+
+// limiter is a token bucket: rate tokens accrue per second up to burst, and
+// allow spends one.
+type limiter struct {
+	mu     sync.Mutex
+	tokens float64
+	burst  float64
+	rate   float64
+	last   time.Time
+}
+
+func newLimiter(rate, burst float64) *limiter {
+	return &limiter{tokens: burst, burst: burst, rate: rate, last: time.Now()}
+}
+
+func (l *limiter) allow() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	l.tokens += now.Sub(l.last).Seconds() * l.rate
+	if l.tokens > l.burst {
+		l.tokens = l.burst
+	}
+	l.last = now
+	if l.tokens < 1 {
+		return false
+	}
+	l.tokens--
+	return true
 }
 
 // drive submits a small transfer between two random demo accounts on a
@@ -164,11 +224,30 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/state", s.handleState)
 	mux.HandleFunc("/account", s.handleAccount)
 	mux.HandleFunc("/events", s.handleEvents)
-	mux.HandleFunc("/tx", s.handleTx)
-	mux.HandleFunc("/faucet", s.handleFaucet)
+	mux.HandleFunc("/tx", s.limited(s.handleTx))
+	mux.HandleFunc("/faucet", s.limited(s.handleFaucet))
 	mux.HandleFunc("/fault", s.handleFault)
 	mux.Handle("/", staticOrStatus())
-	return withCORS(mux)
+	return withCORS(maxBody(mux))
+}
+
+// limited fronts a handler with the shared write rate limiter.
+func (s *server) limited(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.writes.allow() {
+			http.Error(w, "rate limited, slow down", http.StatusTooManyRequests)
+			return
+		}
+		h(w, r)
+	}
+}
+
+// maxBody caps request bodies so a giant POST cannot exhaust memory.
+func maxBody(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+		h.ServeHTTP(w, r)
+	})
 }
 
 type accountView struct {
@@ -228,6 +307,13 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+	if s.viewers.Add(1) > maxViewers {
+		s.viewers.Add(-1)
+		http.Error(w, "too many live viewers, try again shortly", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.viewers.Add(-1)
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -264,7 +350,12 @@ func (s *server) handleTx(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.cluster.Submit(tx); err != nil {
+	switch err := s.cluster.Submit(tx); {
+	case err == nil:
+	case errors.Is(err, chain.ErrMempoolFull):
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	default:
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -320,6 +411,29 @@ func (s *server) handleFault(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "index out of range", http.StatusBadRequest)
 		return
 	}
+
+	// Refuse if faulty-plus-slashed stake would reach a third of the
+	// original total, so the honest set can always still make two thirds
+	// and the demo stays recoverable.
+	snap := s.cluster.Snapshot()
+	s.mu.Lock()
+	var lost uint64
+	for i, v := range snap.Validators {
+		if v.Slashed || s.faulty[i] {
+			lost += s.origStake[i]
+		}
+	}
+	if !s.faulty[body.Index] {
+		lost += s.origStake[body.Index]
+	}
+	if 3*lost >= s.origTotal {
+		s.mu.Unlock()
+		http.Error(w, "fault budget reached: any more would stall consensus", http.StatusConflict)
+		return
+	}
+	s.faulty[body.Index] = true
+	s.mu.Unlock()
+
 	s.cluster.MakeFaulty(body.Index)
 	w.WriteHeader(http.StatusAccepted)
 }
