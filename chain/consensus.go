@@ -107,21 +107,23 @@ func (b *bus) broadcast(m message) {
 // node is one validator running the consensus loop against its own copy of
 // the chain.
 type node struct {
-	self        Validator
-	set         *ValidatorSet
-	chain       *Chain
-	mempool     *Mempool
-	inbox       chan message
-	bus         *bus
-	cluster     *Cluster
-	ctx         context.Context
-	minInterval time.Duration
-	maxBlockTxs int
-	pending     []message
-	seenVotes   map[int64]map[string]vote
-	evidence    []Evidence
-	slashed     map[string]bool // offenders already slashed, to stop re-slashing
-	byzantine   atomic.Bool     // set by MakeFaulty, possibly mid-run
+	self         Validator
+	set          *ValidatorSet
+	chain        *Chain
+	mempool      *Mempool
+	inbox        chan message
+	bus          *bus
+	cluster      *Cluster
+	ctx          context.Context
+	minInterval  time.Duration
+	maxBlockTxs  int
+	pending      []message
+	seenVotes    map[int64]map[string]vote
+	evidence     []Evidence
+	slashed      map[string]bool  // offenders detected, to stop re-detecting
+	pendingSlash map[string]int64 // offender -> height its slash takes effect
+	election     *election        // proposer accumulator and stake view
+	byzantine    atomic.Bool      // set by MakeFaulty, possibly mid-run
 }
 
 // voteMemory is how many past heights of first-seen votes a node keeps for
@@ -140,6 +142,15 @@ func (n *node) run(maxHeight int64) {
 	for h := int64(1); maxHeight <= 0 || h <= maxHeight; h++ {
 		if n.ctx.Err() != nil {
 			return
+		}
+		// Apply any slash whose effective height has arrived, before this
+		// height's proposer and threshold are computed from it.
+		for addr, eff := range n.pendingSlash {
+			if eff <= h {
+				n.election.slash(addr)
+				n.set.Slash(addr) // idempotent; keeps the shared set honest for display
+				delete(n.pendingSlash, addr)
+			}
 		}
 		n.runHeight(h)
 		n.prunePending(h)
@@ -163,8 +174,9 @@ func (n *node) run(maxHeight int64) {
 // than two thirds of stake accepts, then commit. Commit on
 // 3*accepted > 2*total (strictly more than two thirds, integer-safe).
 func (n *node) runHeight(h int64) {
-	// 1. If it is our turn, build a block and broadcast it.
-	if n.set.ProposerForHeight(h).address == n.self.address {
+	// 1. If it is our turn, build a block and broadcast it. election.next
+	// is advanced exactly once per height, here.
+	if n.election.next() == n.self.address {
 		n.bus.broadcast(proposalMsg{block: n.propose(h)})
 	}
 
@@ -186,9 +198,11 @@ func (n *node) runHeight(h int64) {
 	}
 
 	// 4. Tally votes by stake until strictly more than two thirds accepts.
+	// Stake comes from election, this node's slash-scheduled view, so every
+	// node uses the same threshold for this height.
 	counted := make(map[string]bool)
 	var accepted uint64
-	total := n.set.TotalStake()
+	total := n.election.totalStake()
 	for 3*accepted <= 2*total {
 		v := n.waitFor(func(m message) bool {
 			vm, ok := m.(voteMsg)
@@ -200,11 +214,11 @@ func (n *node) runHeight(h int64) {
 				!counted[vm.vote.voter]
 		}).(voteMsg).vote
 
-		if !n.set.Contains(v.voter) || !verifyVote(v) {
+		if !n.election.contains(v.voter) || !verifyVote(v) {
 			continue
 		}
 		counted[v.voter] = true
-		accepted += n.set.StakeOf(v.voter)
+		accepted += n.election.stakeOf(v.voter)
 	}
 
 	// 5. Commit the block the set agreed on.
@@ -295,10 +309,10 @@ func (n *node) prunePending(h int64) {
 
 // observe runs on every message a node pulls off the inbox. It keeps the
 // first vote it saw from each (height, voter); a second, conflicting vote
-// is equivocation, which it verifies, records as Evidence, and slashes the
-// offender for. An offender already slashed is ignored, so a validator that
-// keeps double-voting after the fact does not grow evidence or re-take the
-// set's write lock every height.
+// is equivocation, which it verifies, records as Evidence, and schedules a
+// slash for slashDelay heights later. An offender already handled is
+// ignored, so a validator that keeps double-voting does not grow the
+// evidence list or reschedule every height.
 func (n *node) observe(m message) {
 	vm, ok := m.(voteMsg)
 	if !ok {
@@ -323,7 +337,7 @@ func (n *node) observe(m message) {
 		if verifyEvidence(e) {
 			n.evidence = append(n.evidence, e)
 			n.slashed[v.voter] = true
-			n.set.Slash(e.Offender)
+			n.pendingSlash[e.Offender] = e.Height + slashDelay
 			n.cluster.recordSlash(e.Offender, e.Height)
 		}
 	}

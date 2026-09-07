@@ -2,7 +2,9 @@ package chain
 
 import (
 	"bytes"
+	"context"
 	"testing"
+	"time"
 )
 
 // fourValidators returns a set of four equal-stake validators. With total
@@ -195,6 +197,55 @@ func TestClusterSlashesDoubleVoter(t *testing.T) {
 		}
 		if err := ch.Validate(); err != nil {
 			t.Errorf("node %d chain does not validate: %v", i, err)
+		}
+	}
+}
+
+// Faulting several validators over a live run never stalls consensus: the
+// slash lands on a fixed future height so every node computes each height's
+// proposer and threshold from the same stakes.
+func TestClusterFaultDoesNotStall(t *testing.T) {
+	set := NewValidatorSet(GenerateValidators(12)...) // ranks 8-11 are lower stake
+	cl := NewCluster(nil, set, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		start := time.Now()
+		height := func() int64 { return cl.Snapshot().Height }
+		for _, idx := range []int{9, 10, 11} {
+			for height() < int64(4*idx) && time.Since(start) < 20*time.Second {
+				time.Sleep(time.Millisecond)
+			}
+			cl.MakeFaulty(idx)
+		}
+		for height() < 60 && time.Since(start) < 20*time.Second {
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+	}()
+	cl.RunContext(ctx)
+
+	if h := cl.Snapshot().Height; h < 55 {
+		t.Fatalf("consensus stalled: reached only height %d", h)
+	}
+
+	const common = 50
+	ref := cl.Chain(0).Blocks[common].Hash()
+	for i := 1; i < cl.Size(); i++ {
+		blocks := cl.Chain(i).Blocks
+		if len(blocks) <= common {
+			t.Errorf("node %d only reached height %d", i, len(blocks)-1)
+			continue
+		}
+		if !bytes.Equal(blocks[common].Hash(), ref) {
+			t.Errorf("node %d block %d differs from node 0", i, common)
+		}
+	}
+	for _, idx := range []int{9, 10, 11} {
+		if got := cl.ValidatorSet().StakeOf(set.members[idx].address); got != 0 {
+			t.Errorf("faulted validator %d ended with stake %d, want 0", idx, got)
 		}
 	}
 }

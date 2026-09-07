@@ -95,17 +95,19 @@ func NewCluster(alloc map[string]uint64, set *ValidatorSet, maxBlockTxs int) *Cl
 			panic(fmt.Sprintf("cluster genesis: %v", err))
 		}
 		c.nodes = append(c.nodes, &node{
-			self:        v,
-			set:         set,
-			chain:       &chain,
-			mempool:     mempool,
-			inbox:       b.inboxes[i],
-			bus:         b,
-			cluster:     c,
-			ctx:         context.Background(),
-			maxBlockTxs: maxBlockTxs,
-			seenVotes:   make(map[int64]map[string]vote),
-			slashed:     make(map[string]bool),
+			self:         v,
+			set:          set,
+			chain:        &chain,
+			mempool:      mempool,
+			inbox:        b.inboxes[i],
+			bus:          b,
+			cluster:      c,
+			ctx:          context.Background(),
+			maxBlockTxs:  maxBlockTxs,
+			seenVotes:    make(map[int64]map[string]vote),
+			slashed:      make(map[string]bool),
+			pendingSlash: make(map[string]int64),
+			election:     newElection(set),
 		})
 	}
 
