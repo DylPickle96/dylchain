@@ -387,6 +387,7 @@ func (s *server) handleState(w http.ResponseWriter, _ *http.Request) {
 		"supply":     snap.Supply,
 		"blocks":     snap.Blocks,
 		"validators": snap.Validators,
+		"halts":      snap.Halts,
 		"accounts":   accounts,
 		"seen":       seen,
 	})
@@ -403,6 +404,10 @@ func (s *server) handleAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)

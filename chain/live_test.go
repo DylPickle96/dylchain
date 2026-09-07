@@ -198,3 +198,44 @@ func TestEventStream(t *testing.T) {
 		t.Fatalf("only saw %d block events and %d slash events", blocks, slashes)
 	}
 }
+
+// A paced (server) node keeps only a bounded window of blocks in memory;
+// an unpaced one (test mode) keeps every block so Validate can replay.
+func TestBlockRetention(t *testing.T) {
+	unpaced := NewCluster(nil, fourValidators(t), 0)
+	unpaced.Run(600)
+	if got := len(unpaced.Chain(0).Blocks); got != 601 {
+		t.Errorf("unpaced node kept %d blocks, want 601 (genesis + 600)", got)
+	}
+
+	paced := NewCluster(nil, fourValidators(t), 0)
+	paced.PaceBlocks(time.Millisecond)
+	runUntilHeight(t, paced, 2*blockRetention+40)
+
+	got := len(paced.Chain(0).Blocks)
+	if got >= 2*blockRetention || got < blockRetention {
+		t.Errorf("paced node kept %d blocks, want in [%d, %d)", got, blockRetention, 2*blockRetention)
+	}
+}
+
+// recordHalt surfaces in Snapshot and on the event stream, so a node that
+// stops on an impossible state is visible instead of crashing the process.
+func TestRecordHalt(t *testing.T) {
+	cl := NewCluster(nil, fourValidators(t), 0)
+	events := cl.Subscribe()
+	defer cl.Unsubscribe(events)
+
+	cl.recordHalt("dylabc", "rejected the block at height 5: boom")
+
+	if h := cl.Snapshot().Halts; len(h) != 1 || h[0] != "dylabc: rejected the block at height 5: boom" {
+		t.Errorf("Snapshot halts = %v", h)
+	}
+	select {
+	case e := <-events:
+		if e.Kind != "halt" || e.Validator != "dylabc" {
+			t.Errorf("halt event = %+v", e)
+		}
+	case <-time.After(time.Second):
+		t.Error("no halt event on the stream")
+	}
+}

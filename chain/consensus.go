@@ -126,18 +126,40 @@ type node struct {
 	byzantine    atomic.Bool      // set by MakeFaulty, possibly mid-run
 }
 
-// voteMemory is how many past heights of first-seen votes a node keeps for
-// equivocation detection. Two is enough: both votes of a double-vote are in
-// flight within a height of each other.
-const voteMemory = 2
+const (
+	// voteMemory is how many past heights of first-seen votes a node keeps
+	// for equivocation detection. Two is enough: both votes of a double-vote
+	// are in flight within a height of each other.
+	voteMemory = 2
+	// blockRetention is how many recent blocks a paced (server) node keeps
+	// in memory. Consensus only reads the tip; the full history would grow
+	// without bound over a weeks-long run. Unpaced runs (tests) keep
+	// everything so Validate can replay from genesis.
+	blockRetention = 256
+)
+
+// nodeHalt is panicked by a node that hits an impossible consensus state.
+// run recovers it and records the node as halted instead of crashing the
+// process the whole cluster shares.
+type nodeHalt struct{ reason string }
+
+func (n *node) haltf(format string, a ...any) {
+	panic(nodeHalt{reason: fmt.Sprintf(format, a...)})
+}
 
 // run drives the node one block per height. It stops after maxHeight, or
 // runs until the context is cancelled if maxHeight is zero or less.
 func (n *node) run(maxHeight int64) {
 	defer func() {
-		if r := recover(); r != nil && r != errStopped {
-			panic(r)
+		r := recover()
+		if r == nil || r == errStopped {
+			return
 		}
+		if h, ok := r.(nodeHalt); ok {
+			n.cluster.recordHalt(n.self.address, h.reason)
+			return
+		}
+		panic(r)
 	}()
 	for h := int64(1); maxHeight <= 0 || h <= maxHeight; h++ {
 		if n.ctx.Err() != nil {
@@ -158,6 +180,10 @@ func (n *node) run(maxHeight int64) {
 			if hh <= h-voteMemory {
 				delete(n.seenVotes, hh)
 			}
+		}
+		if n.minInterval > 0 && len(n.chain.Blocks) >= 2*blockRetention {
+			keep := n.chain.Blocks[len(n.chain.Blocks)-blockRetention:]
+			n.chain.Blocks = append([]Block(nil), keep...)
 		}
 		if n.minInterval > 0 {
 			select {
@@ -187,7 +213,7 @@ func (n *node) runHeight(h int64) {
 	}).(proposalMsg).block
 
 	if _, err := n.chain.checkCandidate(candidate); err != nil {
-		panic(fmt.Sprintf("validator %s rejected the block at height %d: %v", n.self.address, h, err))
+		n.haltf("rejected the block at height %d: %v", h, err)
 	}
 
 	// 3. Broadcast our vote for it.
@@ -223,7 +249,7 @@ func (n *node) runHeight(h int64) {
 
 	// 5. Commit the block the set agreed on.
 	if err := n.chain.CommitBlock(candidate); err != nil {
-		panic(fmt.Sprintf("validator %s failed to commit block %d: %v", n.self.address, h, err))
+		n.haltf("failed to commit block %d: %v", h, err)
 	}
 	n.cluster.recordBlock(candidate, n.chain.state)
 }

@@ -29,6 +29,7 @@ type Cluster struct {
 	recent   []BlockInfo
 	proposed map[string]int
 	slashed  map[string]bool
+	halts    []string // "<address>: <reason>" for nodes that stopped on an impossible state
 	balances map[string]uint64
 	nonces   map[string]int64
 	subs     []chan Event
@@ -42,12 +43,12 @@ type BlockInfo struct {
 	Time     int64  `json:"time"`
 }
 
-// Event is a thing worth telling a watcher about: a committed block or a
-// slashed validator.
+// Event is a thing worth telling a watcher about: a committed block, a
+// slashed validator, or a node that halted.
 type Event struct {
-	Kind      string `json:"kind"` // "block" or "slash"
+	Kind      string `json:"kind"` // "block", "slash", or "halt"
 	Height    int64  `json:"height"`
-	Validator string `json:"validator"` // proposer for "block", offender for "slash"
+	Validator string `json:"validator"` // proposer for "block", offender/halted node otherwise
 }
 
 // ValidatorInfo is one validator's state in a Snapshot.
@@ -67,6 +68,7 @@ type Snapshot struct {
 	Supply     uint64          `json:"supply"`
 	Blocks     []BlockInfo     `json:"blocks"` // recent, oldest first
 	Validators []ValidatorInfo `json:"validators"`
+	Halts      []string        `json:"halts"` // nodes that stopped on an impossible state
 }
 
 // NewCluster wires up a cluster: one genesis block built from alloc and
@@ -214,6 +216,15 @@ func (c *Cluster) recordSlash(addr string, height int64) {
 	c.emit(Event{Kind: "slash", Height: height, Validator: addr})
 }
 
+// recordHalt is called by a node's run loop when it stops on an impossible
+// consensus state instead of panicking the shared process.
+func (c *Cluster) recordHalt(addr, reason string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.halts = append(c.halts, addr+": "+reason)
+	c.emit(Event{Kind: "halt", Height: c.height, Validator: addr})
+}
+
 // emit delivers e to every subscriber, dropping it for any whose buffer is
 // full rather than stalling consensus. The caller holds c.mu.
 func (c *Cluster) emit(e Event) {
@@ -254,7 +265,8 @@ func (c *Cluster) Snapshot() Snapshot {
 	s := Snapshot{
 		Height: c.height,
 		Supply: c.supply,
-		Blocks: append([]BlockInfo(nil), c.recent...),
+		Blocks: append([]BlockInfo{}, c.recent...), // [] not null when empty, for the UI
+		Halts:  append([]string{}, c.halts...),
 	}
 	proposed := make(map[string]int, len(c.proposed))
 	for k, v := range c.proposed {
