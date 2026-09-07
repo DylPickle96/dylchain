@@ -67,8 +67,9 @@ separate `test/` directory, so they can call unexported helpers).
 ## Stage 6: multiple validators (BFT) - done, happy path
 
 Built as `Cluster`: N `Validator` goroutines in one process over an
-in-memory broadcast `bus`. Per height: the round-robin proposer drains the
-shared `Mempool`, builds and header-signs a block, and broadcasts it; every
+in-memory broadcast `bus`. Per height: the stake-weighted proposer drains
+the shared `Mempool`, builds and header-signs a block, and broadcasts it;
+every
 validator runs `checkCandidate` against its own `Chain` and broadcasts one
 signed `vote`; each validator tallies votes by stake and calls
 `CommitBlock` once `3*accepted > 2*total`. Out-of-order messages (a vote
@@ -99,8 +100,13 @@ Simplifications, all deliberate:
   stress-tested for safety.
 - One vote step, not prevote + precommit. A real partition could commit two
   blocks at one height. Two steps with locking is a later pass.
-- Round-robin proposer, not stake-weighted priority. Stake is only the
-  commit threshold.
+- `ProposerForHeight` runs the CometBFT priority accumulator (add stake to
+  every priority, highest proposes, winner drops by total stake), but
+  recomputes it from height 1 on every call to stay a pure function, at
+  `O(height * n)`. Ties break by member index, not address. No
+  centering/scaling step: the set is fixed and priorities stay bounded, so
+  it is not needed. If runs ever get long, carry the accumulator on the
+  node instead.
 - No proposer timeout. If a height's proposer never proposes, every node
   blocks in `waitFor`. First thing 6f fixes.
 - `Mempool` is FIFO, no validation, dedup, or fee ordering.

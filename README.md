@@ -34,7 +34,7 @@ The package is one Go package split by concern:
 | `state.go` | `State`, `NewState`, `Apply` |
 | `address.go` | address derivation to and from ed25519 keys |
 | `coin.go` | native coin denom, precision, amount formatting |
-| `validator.go` | `Validator`, `ValidatorSet`, proposer rotation and stake |
+| `validator.go` | `Validator`, `ValidatorSet`, stake-weighted proposer selection |
 | `mempool.go` | `Mempool`, the shared pending-transaction queue |
 | `consensus.go` | votes, the in-process bus, the per-validator round loop |
 | `cluster.go` | `Cluster`, the entry point for a consensus run |
@@ -116,7 +116,10 @@ in state, so `ReplayBlocks` can rebuild the ledger from a block list alone.
 in-memory broadcast bus, doing one-step-vote BFT. Each validator keeps its
 own `Chain`, seeded from one shared genesis block. Per height:
 
-1. `ValidatorSet.ProposerForHeight` picks the proposer by round-robin.
+1. `ValidatorSet.ProposerForHeight` picks the proposer by stake-weighted
+   priority (CometBFT style): a validator with twice the stake proposes
+   about twice as often, interleaved rather than in a run. Equal stakes
+   reduce to plain round-robin.
 2. The proposer drains the shared `Mempool`, builds a block, signs its
    header, and broadcasts it.
 3. Every validator checks the block against its own chain and broadcasts a
@@ -130,8 +133,9 @@ message for a later height) are stashed per node and rescanned, so timing
 between goroutines does not wedge a round.
 
 This is the happy path only. One process, no message loss, every validator
-honest and online. Proposer selection is round-robin, not stake-weighted:
-stake decides the commit threshold, nothing else.
+honest and online. `ProposerForHeight` recomputes the priority accumulator
+from height 1 on every call, so it stays a pure function of the height and
+the set, at `O(height)` per call.
 
 ## Validation
 

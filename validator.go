@@ -37,12 +37,26 @@ func (vs *ValidatorSet) TotalStake() uint64 {
 	return staked
 }
 
-func (vs *ValidatorSet) ProposerForHeight(h int64) Validator {
+func (vs *ValidatorSet) ProposerForHeight(height int64) Validator {
 	if len(vs.members) == 0 {
 		panic("no members in validator set to propose")
 	}
-	n := int64(len(vs.members))
-	return vs.members[((h-1)%n+n)%n]
+	total := int64(vs.TotalStake())
+	priorities := make([]int64, len(vs.members))
+	winner := 0
+	for h := int64(1); h <= height; h++ {
+		for i := range vs.members {
+			priorities[i] += int64(vs.members[i].stake)
+		}
+		winner = 0
+		for i := range priorities {
+			if priorities[i] > priorities[winner] { // ties: lowest index
+				winner = i
+			}
+		}
+		priorities[winner] -= total
+	}
+	return vs.members[winner]
 }
 
 func (vs *ValidatorSet) StakeOf(addr string) uint64 {
