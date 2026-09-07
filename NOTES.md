@@ -4,17 +4,18 @@ Context for resuming work. Not user-facing (see `README.md` for that).
 
 ## Where we are
 
-Stages 1 to 5 are done, including Merkle inclusion proofs (the leftover
-from the original stage 5 commit). Last committed tip before this work:
+Stages 1 to 6 are done. Stage 6 (one-step-vote BFT consensus) is the happy
+path only. Stage 6 tip:
 
 ```
-a790da6  Name the chain dyl and add the DYL coin
-d9effdc  Add working notes for resuming development
-d4daad7  Add README
-2a1c1a5  Commit transactions with a Merkle root      (stage 5 root)
+5c126db  Run one-step-vote BFT consensus across a validator cluster   6e
+01c2aa8  Add the validator set                                        6d
+f93f677  Sign blocks with the proposer's key                          6c
+e0eaf55  Replay state from genesis in Validate                        6b
+34125d3  Record the genesis allocation in the genesis block           6a
 ```
 
-`gofmt`, `go vet`, `go test ./...` clean after the proof work.
+`gofmt`, `go vet`, `go test -race ./...` all clean.
 
 The package and module are named `dyl`. The native coin is `DYL`, base
 unit `udyl`, precision 6, with `FormatAmount` in `coin.go` for display.
@@ -30,8 +31,9 @@ until then.
 | 3 | Account state, `Apply` | done |
 | 4 | ed25519 signatures | done |
 | 5 | Merkle root and inclusion proofs | done |
-| 6 | Multiple validators (BFT) | next |
-| 7 | Slashing and minting | after 6 |
+| 6 | Multiple validators (BFT), one-step vote, happy path | done |
+| 6f | Proposer timeouts, round changes, double-sign detection | next |
+| 7 | Slashing and minting | after 6f |
 
 ## Merkle proofs (done)
 
@@ -62,30 +64,59 @@ parity plus `index /= 2` is enough. Do not mix the two encodings.
 Tests live in `merkle_test.go` next to the package (idiomatic Go: not a
 separate `test/` directory, so they can call unexported helpers).
 
-## Stage 6: multiple validators (BFT)
+## Stage 6: multiple validators (BFT) - done, happy path
 
-The real one. Several validator goroutines in one process, communicating
-over channels. Rough shape:
+Built as `Cluster`: N `Validator` goroutines in one process over an
+in-memory broadcast `bus`. Per height: the round-robin proposer drains the
+shared `Mempool`, builds and header-signs a block, and broadcasts it; every
+validator runs `checkCandidate` against its own `Chain` and broadcasts one
+signed `vote`; each validator tallies votes by stake and calls
+`CommitBlock` once `3*accepted > 2*total`. Out-of-order messages (a vote
+before its proposal, traffic for a later height) are stashed in
+`node.pending` and rescanned by `waitFor`; `prunePending` drops decided
+heights.
 
-- a validator set with stake weights
-- one proposer per round proposes a block
-- others vote; a block commits when it has votes from more than two thirds
-  of stake
-- committed means final (BFT gives instant finality, unlike proof of work)
+The three deferred items from the original plan are all done:
 
-Things this forces that are currently deferred:
+- **Genesis allocation in the genesis block.** `Block.Alloc`, set on the
+  genesis block only, `omitempty` so non-genesis blocks and empty allocs do
+  not change the hash. `ReplayBlocks([]Block) (State, error)` seeds from it
+  and applies every later block. `NewChain` goes through
+  `newChainFromGenesis`, which replays, so a fresh chain and a synced one
+  derive genesis state the same way.
+- **Propose vs commit split.** `AddBlock` stays the unsigned single-writer
+  path. `CommitBlock` is the consensus path: it does not build a block,
+  only re-checks a candidate (`checkCandidate`: link, height, `TxRoot`,
+  proposer signature, `Apply`) and advances state.
+- **Replay-based `Validate`.** It runs `ReplayBlocks` over the whole chain,
+  checks the result matches `c.state`, and verifies each consensus block's
+  proposer signature.
 
-- **Genesis allocation into the genesis block.** Right now `NewChain`
-  takes an `alloc` map and loads it straight into state; it is not in the
-  block. Once nodes exchange chains, the block list has to be
-  self-contained. Put the allocation in the genesis block (a field, or
-  synthetic mint transactions) and add `ReplayBlocks([]Block) (State, error)`.
-- `AddBlock` currently drives block production and state advance together.
-  BFT will likely split "propose a candidate block" from "commit a block
-  the set agreed on". Expect `AddBlock` to move behind a proposer or get a
-  sibling method.
-- A stronger `Validate` that replays state from genesis and confirms every
-  block applies, not just that hashes link.
+Simplifications, all deliberate:
+
+- One process, channels not sockets. No message loss, no reordering beyond
+  goroutine scheduling, no Byzantine nodes. One-step voting is not actually
+  stress-tested for safety.
+- One vote step, not prevote + precommit. A real partition could commit two
+  blocks at one height. Two steps with locking is a later pass.
+- Round-robin proposer, not stake-weighted priority. Stake is only the
+  commit threshold.
+- No proposer timeout. If a height's proposer never proposes, every node
+  blocks in `waitFor`. First thing 6f fixes.
+- `Mempool` is FIFO, no validation, dedup, or fee ordering.
+- `ValidatorSet` holds every validator's private key, because one process
+  simulates all of them. A real node would hold only its own.
+- `bus` inboxes are fixed 1024-buffer channels. A run producing more than
+  that per node would block. Fine at current sizes.
+
+## Stage 6f: liveness and equivocation (next)
+
+- Proposer timeout, then a round change to the next proposer for the same
+  height.
+- Detect a validator that signs two different blocks, or votes twice, at
+  one height. This is the evidence stage 7 slashing consumes.
+- Probably the point to introduce prevote + precommit if one-step starts
+  feeling too far from real BFT.
 
 ## Stage 7: slashing and minting
 
@@ -98,18 +129,23 @@ Things this forces that are currently deferred:
 
 ## Parked design questions
 
-- **Genesis allocation in the genesis block** (see stage 6). Needed once
-  replay or sync exists.
-- **`type Address string`** instead of bare `string` for `From`, `To`, and
-  state map keys. Ergonomic only, do it anytime.
+- **`type Address string`** instead of bare `string` for `From`, `To`,
+  state map keys, `Proposer`, and vote/validator addresses. Ergonomic only,
+  do it anytime.
 - **`Hash()` reuses `Block` with fields zeroed** to hash the header. A
-  dedicated `blockHeader` struct would be cleaner. Cosmetic.
+  dedicated `blockHeader` struct would be cleaner, more so now the header
+  also carries `Alloc` and `Proposer`. Cosmetic.
 - **Block hash determinism relies on `encoding/json` field order.** Stable
   in practice, but a canonical encoder is the real answer. Low priority.
-- **Consistent tip rewrite is undetectable.** Changing a tip transaction
-  and recomputing its `TxRoot` passes `Validate`, because nothing links to
-  the tip's hash. Closes when consensus signs blocks. Documented in a test
-  (`TestValidateDoesNotCatchConsistentTipRewrite`).
+- **Block hash is derived, not stored.** On a consensus chain the proposer
+  signature covers the header, so a consistent rewrite is caught
+  (`TestValidateCatchesConsistentTipRewrite`,
+  `TestValidateCatchesTamperedConsensusHeader`). On an unsigned `AddBlock`
+  chain, a header-only field like `CreatedAt` on the tip can still be
+  rewritten undetected. A stored, signed hash closes it fully.
+- **`checkCandidate` runs `Apply`, then `CommitBlock` returns that state
+  rather than reapplying.** Fine. If the flow grows, watch that the two do
+  not drift.
 - **Export `MerkleProof` / `VerifyMerkleProof`** when another package is
   actually a light client. Until then they stay unexported like
   `merkleRoot`.
@@ -119,7 +155,7 @@ Things this forces that are currently deferred:
 - One concept per stage. Write the code, then tests, then commit.
 - Dylan writes the implementation and asks for hints and review. Agent
   writes tests. Flag confidence levels explicitly.
-- `gofmt` + `go vet` + `go test ./...` before every commit.
+- `gofmt` + `go vet` + `go test -race ./...` before every commit.
 - Commit messages: plain, no co-author line, no em dashes or semicolons.
 - Account model, integer amounts, standard library only.
 - Unit tests stay in `*_test.go` beside the code, `package dyl`.

@@ -18,7 +18,8 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 | 3 | Account state and block application | done |
 | 4 | ed25519 transaction signatures | done |
 | 5 | Merkle root and inclusion proofs | done |
-| 6 | Multiple validators (BFT consensus) | not started |
+| 6 | Multiple validators (BFT consensus) | done, happy path |
+| 6f | Proposer timeouts, round changes, double-sign detection | not started |
 | 7 | Slashing and minting | not started |
 
 ## Layout
@@ -27,12 +28,16 @@ The package is one Go package split by concern:
 
 | File | Contents |
 |------|----------|
-| `block.go` | `Block`, `Block.Hash` |
-| `chain.go` | `Chain`, `NewChain`, `AddBlock`, `Validate` |
+| `block.go` | `Block`, `Block.Hash`, `genesisBlock`, proposer signatures |
+| `chain.go` | `Chain`, `NewChain`, `AddBlock`, `CommitBlock`, `Validate`, `ReplayBlocks` |
 | `transaction.go` | `Transaction`, `Sign`, Merkle root and proofs |
 | `state.go` | `State`, `NewState`, `Apply` |
 | `address.go` | address derivation to and from ed25519 keys |
 | `coin.go` | native coin denom, precision, amount formatting |
+| `validator.go` | `Validator`, `ValidatorSet`, proposer rotation and stake |
+| `mempool.go` | `Mempool`, the shared pending-transaction queue |
+| `consensus.go` | votes, the in-process bus, the per-validator round loop |
+| `cluster.go` | `Cluster`, the entry point for a consensus run |
 | `*_test.go` | tests, with shared fixtures in `testutil_test.go` |
 
 ## Model
@@ -78,44 +83,85 @@ orders hashes by index parity and does not need the leaf count.
 
 ## How a block is added
 
-`AddBlock` is the single entry point. The caller supplies only the
-transactions. Everything that has to stay consistent with the rest of the
-chain is derived:
+There are two paths onto the chain.
+
+`AddBlock` is the single-writer path, for a chain with one author and no
+consensus. The caller supplies only the transactions, and everything that
+has to stay consistent with the rest of the chain is derived:
 
 1. `PreviousHash` is set to the hash of the current tip.
 2. `Height` is the tip's height plus one.
 3. `TxRoot` is computed from the transactions.
 4. `Apply` runs the transactions against the chain's current state.
 
+`CommitBlock` is the consensus path. It does not build a block: the
+proposer already did, and the caller has gathered the votes. It re-runs
+every check through `checkCandidate` (link, height, `TxRoot`, proposer
+signature, `Apply`) and advances state. A node that only ever receives
+committed blocks stays correct through it.
+
 `Apply` is all-or-nothing and works on a copy, so the chain's state is
 never left half-updated. The first invalid transaction (bad signature,
 wrong nonce, insufficient balance, malformed) rejects the whole block, and
-`AddBlock` returns an error with nothing appended. Within a valid block,
-transactions apply in order, so a later one sees the effect of an earlier
-one.
+nothing is appended. Within a valid block, transactions apply in order, so
+a later one sees the effect of an earlier one.
+
+The genesis allocation lives in the genesis block's `Alloc` field, not just
+in state, so `ReplayBlocks` can rebuild the ledger from a block list alone.
+`NewChain` derives its own starting state through that same replay path.
+
+## Consensus
+
+`Cluster` runs several `Validator` goroutines in one process, joined by an
+in-memory broadcast bus, doing one-step-vote BFT. Each validator keeps its
+own `Chain`, seeded from one shared genesis block. Per height:
+
+1. `ValidatorSet.ProposerForHeight` picks the proposer by round-robin.
+2. The proposer drains the shared `Mempool`, builds a block, signs its
+   header, and broadcasts it.
+3. Every validator checks the block against its own chain and broadcasts a
+   single signed vote for it.
+4. When a validator has counted votes from **more than two thirds of
+   stake** (`3*accepted > 2*total`), it commits the block. Committed is
+   final: no fork choice, no reversion.
+
+Votes and proposals that arrive out of order (a vote before its proposal, a
+message for a later height) are stashed per node and rescanned, so timing
+between goroutines does not wedge a round.
+
+This is the happy path only. One process, no message loss, every validator
+honest and online. Proposer selection is round-robin, not stake-weighted:
+stake decides the commit threshold, nothing else.
 
 ## Validation
 
-`Chain.Validate` checks two kinds of invariant:
+`Chain.Validate` checks:
 
-- **Per block:** `TxRoot` equals a fresh recompute of the Merkle root, so
-  the transaction body cannot be swapped under a valid header. This is the
-  full-node check, not an inclusion proof.
+- **Per block:** `TxRoot` equals a fresh recompute of the Merkle root, and
+  a consensus block's proposer signature verifies over its header.
 - **Per adjacent pair:** the stored `PreviousHash` matches a recompute of
   the earlier block, and the height increases by exactly one.
+- **Whole chain:** `ReplayBlocks` rebuilds the ledger from genesis and it
+  matches the chain's own state, so a transaction cannot be altered after
+  the fact without breaking its signature on replay, and in-memory state
+  cannot drift from the blocks unnoticed.
 
 ### Known gaps
 
-- The block hash is derived, not stored. Tampering with a block is caught
-  by the next block's link check, so the final block's header is only
-  partially protected. Changing a tip transaction is caught by the
-  `TxRoot` check, but a fully consistent tip rewrite (transaction changed
-  and `TxRoot` recomputed) is not. This closes once consensus signs
-  blocks.
-- The genesis allocation is passed to `NewChain` and loaded into state
-  directly. It is not recorded in the genesis block, so the chain cannot
-  be replayed from the block list alone. This will matter at stage 6, when
-  nodes exchange chains.
+- The block hash is still derived, not stored. On a consensus chain the
+  proposer signature covers the whole header, so a consistent rewrite of
+  any block is caught. On a single-writer `AddBlock` chain there is no
+  signature, so a rewrite of a header-only field such as `CreatedAt` on the
+  tip, which nothing links to, still slips past. A stored, signed hash is
+  the real fix.
+- Consensus runs in one process over channels. There is no real network,
+  no message loss, and no Byzantine behaviour, so one-step voting is not
+  actually stress-tested for safety. A partition could commit two blocks at
+  one height; two vote steps (prevote plus precommit) are what prevent
+  that.
+- No proposer timeout. If a height's proposer never proposes, every node
+  blocks waiting for it. That, round changes, and double-sign detection are
+  stage 6f.
 
 ## Running the tests
 
