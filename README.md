@@ -44,9 +44,10 @@ web/       the explorer UI, React + Vite (stage 9)
 | `state.go` | `State`, `NewState`, `Apply` |
 | `address.go` | address derivation to and from ed25519 keys |
 | `coin.go` | native coin denom, precision, amount formatting, block reward |
-| `validator.go` | `Validator`, `ValidatorSet`, stake-weighted proposer selection |
+| `validator.go` | `Validator`, `ValidatorSet`, stake-weighted proposer selection, `Slash` |
 | `mempool.go` | `Mempool`, the shared pending-transaction queue |
-| `consensus.go` | votes, the in-process bus, the per-validator round loop |
+| `consensus.go` | votes, the in-process bus, the per-validator round loop, equivocation detection |
+| `evidence.go` | `Evidence` for a double-vote, `verifyEvidence` |
 | `cluster.go` | `Cluster`, the entry point for a consensus run |
 | `*_test.go` | tests, with shared fixtures in `testutil_test.go` |
 
@@ -152,11 +153,30 @@ Votes and proposals that arrive out of order (a vote before its proposal, a
 message for a later height) are stashed per node and rescanned, so timing
 between goroutines does not wedge a round.
 
-This is the happy path only: one process, no message loss, every validator
-honest and online. `ProposerForHeight` recomputes the priority accumulator
-from height 1 on every call, so it stays a pure function of the height and
-the set, at `O(height * n)` per call. That, and the other `O(n^2)` costs in
-the vote path, are what the stage 7.5 scaling pass addresses.
+`ProposerForHeight` recomputes the priority accumulator from height 1 on
+every call, so it stays a pure function of the height and the set, at
+`O(height * n)` per call. That, and the other `O(n^2)` costs in the vote
+path, are what the stage 7.5 scaling pass addresses.
+
+## Faults
+
+`Cluster.MakeFaulty(i)` turns validator `i` Byzantine: it broadcasts a
+second vote for a junk hash every height. That vote never matches a tally
+predicate, so consensus still commits on the honest majority.
+
+Every node runs `observe` over each message it receives, keeping the first
+vote it saw from each (height, voter). A second, conflicting vote is
+`Evidence`. Once `verifyEvidence` confirms it (both votes validly signed by
+the offender, same height, different block), the node records it and calls
+`ValidatorSet.Slash`, which zeroes that validator's stake. A slashed
+validator is skipped for proposer selection and contributes nothing to the
+two-thirds threshold from then on. `Cluster.Evidence()` gathers what the
+cluster caught, one entry per offender and height.
+
+This is the only fault handled. Nodes slash independently and off-chain, so
+they can briefly disagree on the set between detections. That is fine at
+the demo's scale but not consensus-safe in general; the real fix is
+recording evidence in a block so every node slashes at the same height.
 
 ## Validation
 
@@ -179,14 +199,16 @@ the vote path, are what the stage 7.5 scaling pass addresses.
   signature, so a rewrite of a header-only field such as `CreatedAt` on the
   tip, which nothing links to, still slips past. A stored, signed hash is
   the real fix.
-- Consensus runs in one process over channels. There is no real network,
-  no message loss, and no Byzantine behaviour, so one-step voting is not
-  actually stress-tested for safety. A partition could commit two blocks at
-  one height; two vote steps (prevote plus precommit) are what prevent
-  that.
+- Consensus runs in one process over channels, with no real network and no
+  message loss, so one-step voting is not actually stress-tested for
+  safety. A partition could commit two blocks at one height; two vote steps
+  (prevote plus precommit) are what prevent that.
 - No proposer timeout. If a height's proposer never proposes, every node
-  blocks waiting for it. That, round changes, and double-sign detection are
-  stage 6f.
+  blocks waiting for it. Proposer timeouts and round changes were
+  considered (stage 6f) and dropped: nothing in a single process needs
+  them.
+- Slashing is applied per node, off-chain, so nodes can disagree on the
+  validator set for a short window after a double-sign. See Faults.
 
 ## Running the tests
 

@@ -124,7 +124,8 @@ Simplifications, all deliberate:
   it is not needed. If runs ever get long, carry the accumulator on the
   node instead.
 - No proposer timeout. If a height's proposer never proposes, every node
-  blocks in `waitFor`. First thing 6f fixes.
+  blocks in `waitFor`. Not fixed (6f dropped); nothing in one process
+  stalls a proposer.
 - `Mempool` is FIFO, no validation, dedup, or fee ordering.
 - `ValidatorSet` holds every validator's private key, because one process
   simulates all of them. A real node would hold only its own.
