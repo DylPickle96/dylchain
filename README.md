@@ -3,7 +3,7 @@
 A toy blockchain built from scratch in Go, as a learning exercise. It is
 built in stages, each one adding a single concept and its tests before the
 next begins. The goal is understanding the mechanics (hashing, account
-state, signatures, Merkle commitments, and eventually BFT consensus), not
+state, signatures, Merkle commitments, stake-weighted BFT consensus), not
 production use.
 
 The native coin is **DYL**. Balances and amounts are counts of its base
@@ -19,12 +19,9 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 | 4 | ed25519 transaction signatures | done |
 | 5 | Merkle root and inclusion proofs | done |
 | 6 | Multiple validators (BFT consensus) | done, happy path |
-| 7a | Minting: block reward to the proposer | done |
-| 7b | Equivocation detection | done |
-| 7c | Slashing | done |
-| 7.5 | Scaling pass (hundreds of validators) | done |
-| 8a | Live-cluster primitives | done |
-| 8b | Demo backend (HTTP + SSE server) | done |
+| 7 | Minting, equivocation detection, slashing | done |
+| 7.5 | Scaling to a few hundred validators | done |
+| 8 | Demo server (HTTP + SSE) | done |
 | 9 | Explorer UI | not started |
 
 ## Layout
@@ -32,7 +29,7 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 ```
 chain/     the chain library, package chain, imported as dyl/chain
 cmd/dyld/  the demo server: runs a live cluster, serves HTTP + SSE
-web/       the explorer UI, React + Vite (stage 9)
+web/       the explorer UI, React + Vite (not built yet)
 ```
 
 `chain/` is one Go package split by concern:
@@ -157,10 +154,9 @@ between goroutines does not wedge a round.
 `ProposerForHeight` recomputes the priority accumulator from height 1 on
 every call, so it stays a pure function of the height and the set, at
 `O(height * n)` per call. The vote path is `O(n^2)` per height, dominated
-by ed25519 verification. Measured on an M4 Pro this is ~35 ms/height at 128
-validators and flat over hundreds of heights, which the stage 7.5 notes
-found is fast enough for the demo; the per-node accumulator and batched
-verification are written up there as deferred.
+by ed25519 verification. Both are comfortable up to a few hundred
+validators; past that the accumulator would move onto each node and
+verification would be batched.
 
 ## Faults
 
@@ -178,9 +174,9 @@ two-thirds threshold from then on. `Cluster.Evidence()` gathers what the
 cluster caught, one entry per offender and height.
 
 This is the only fault handled. Nodes slash independently and off-chain, so
-they can briefly disagree on the set between detections. That is fine at
-the demo's scale but not consensus-safe in general; the real fix is
-recording evidence in a block so every node slashes at the same height.
+they can briefly disagree on the set between detections. It is not
+consensus-safe in general; the real fix is recording evidence in a block so
+every node slashes at the same height.
 
 ## Validation
 
@@ -208,11 +204,9 @@ recording evidence in a block so every node slashes at the same height.
   safety. A partition could commit two blocks at one height; two vote steps
   (prevote plus precommit) are what prevent that.
 - No proposer timeout. If a height's proposer never proposes, every node
-  blocks waiting for it. Proposer timeouts and round changes were
-  considered (stage 6f) and dropped: nothing in a single process needs
-  them.
-- Slashing is applied per node, off-chain, so nodes can disagree on the
-  validator set for a short window after a double-sign. See Faults.
+  blocks waiting for it. Nothing in a single process stalls a proposer, so
+  round changes are not built.
+- Slashing is applied per node, off-chain (see Faults).
 
 ## Running the demo
 
@@ -233,8 +227,7 @@ on `:8080`:
 | `POST /fault` | `{"index": N}`, makes validator N double-vote |
 
 Flags: `-validators`, `-addr`, `-block-time`, `-tx-every`. It serves the
-built UI from `web/dist` when that exists (stage 9), otherwise just the
-API.
+built UI from `web/dist` when that exists, otherwise just the API.
 
 ## Running the tests
 
