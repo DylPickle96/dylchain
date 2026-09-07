@@ -74,11 +74,18 @@ type bus struct {
 	inboxes []chan message
 }
 
-// newBus builds a bus with one buffered inbox per node.
+// newBus builds a bus with one buffered inbox per node. Each height puts
+// about one proposal plus one vote per node into every inbox, so the buffer
+// scales with the node count to leave a node room to fall several heights
+// behind before a broadcast blocks.
 func newBus(nodes int) *bus {
+	buf := 1024
+	if n := 16 * nodes; n > buf {
+		buf = n
+	}
 	b := &bus{inboxes: make([]chan message, nodes)}
 	for i := range b.inboxes {
-		b.inboxes[i] = make(chan message, 1024)
+		b.inboxes[i] = make(chan message, buf)
 	}
 	return b
 }

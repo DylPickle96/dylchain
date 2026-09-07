@@ -6,8 +6,9 @@ Context for resuming work. Not user-facing (see `README.md` for that).
 
 Stages 1 to 6 done (BFT consensus, happy path only). 7a: blocks mint a
 reward to their proposer. 7b: nodes catch a validator that double-votes.
-7c: a caught double-voter is slashed to zero stake. 7.5 (scaling pass) is
-next.
+7c: a caught double-voter is slashed to zero stake. 7.5: measured, the
+cluster already scales to ~200 validators, only the inbox buffer needed a
+fix. Stage 8 (demo backend) is next.
 
 Stage 6 tip:
 
@@ -41,8 +42,8 @@ the genesis allocation and grows by `BlockReward` per committed block.
 | 7a | Minting: block reward to the proposer | done |
 | 7b | Equivocation detection: `Evidence` from conflicting signed messages | done |
 | 7c | Slashing: verified evidence cuts the offender's stake | done |
-| 7.5 | Scaling pass: run hundreds of validators smoothly | next |
-| 8 | Demo backend: long-running cluster, HTTP + SSE, fault injection | after 7.5 |
+| 7.5 | Scaling pass: run hundreds of validators smoothly | done |
+| 8 | Demo backend: long-running cluster, HTTP + SSE, fault injection | next |
 | 9 | Explorer UI (React/Vite) | after 8 |
 
 The goal is a portfolio proof of concept: the cluster running live behind
@@ -129,8 +130,9 @@ Simplifications, all deliberate:
 - `Mempool` is FIFO, no validation, dedup, or fee ordering.
 - `ValidatorSet` holds every validator's private key, because one process
   simulates all of them. A real node would hold only its own.
-- `bus` inboxes are fixed 1024-buffer channels. A run producing more than
-  that per node would block. Fine at current sizes.
+- `bus` inboxes are buffered at `max(1024, 16*N)` (stage 7.5). A run that
+  falls more than ~16 heights behind on some node would still block, but
+  nothing observed does.
 
 ## Stage 6f: dropped
 
@@ -205,27 +207,41 @@ applies the slash at the same height. Not replayable from the block list
 for the same reason. If `TestClusterSlashesDoubleVoter` ever flakes, that
 is the escalation.
 
-## Stage 7.5: scaling pass
+## Stage 7.5: scaling pass - done, mostly by measuring
 
-Target ~100 to 200 validators running smoothly, block every 1 to 3
-seconds. The protocol does not change, the data structures do. All the
-current bottlenecks are `O(N^2)` or worse:
+Target was ~100 to 200 validators, a block every 1 to 3 seconds. Added
+`GenerateValidators(n)` (fresh keys, stake halving every 8 ranks, `val-NNN`
+monikers) and `BenchmarkClusterRun` / `TestClusterLargeWithFault`, then
+measured on an M4 Pro:
 
-- **Priority accumulator on the node.** Advance one step per height
-  instead of recomputing `ProposerForHeight` from height 1. Kills the
-  `O(height)` factor. Needs per-node mutable state that stays in lockstep
-  because every node applies the same step in the same order.
-- **Index `StakeOf` / `Contains`** with a `map[string]...` built at
-  construction, rebuilt on slash.
-- **`pending` as `map[int64]map[string]...`** keyed by (height, signer),
-  so "next uncounted vote" is a lookup, not a slice scan. The current
-  linear scan is `O(N^2)` per node per height.
-- **Inbox buffers `~4*N`**, not a flat 1024, or `broadcast` deadlocks.
-- **Parallel vote verification** (small worker pool). ed25519 verify at
-  `O(N^2)` per height is the CPU wall.
-- **Validator-set generator:** N keypairs, stakes from a Zipf or
-  exponential draw (a few whales, a long tail), normalized to a round
-  total, a moniker each, maybe a fake uptime for the UI.
+```
+n=16    ~1.2 ms/height
+n=64    ~10  ms/height   (flat over 20, 100, 300 heights)
+n=128   ~35  ms/height
+```
+
+That already clears the target with room to spare, so the only real change
+was **inbox buffers sized to the node count** (`max(1024, 16*N)`), which is
+a correctness fix: a fixed 1024 overflows and deadlocks `broadcast` above
+~60 validators.
+
+The profile at n=128 is ~48% ed25519 vote verification (`O(N^2)` per
+height, but height-independent and already spread across the node
+goroutines) and ~33% allocation/GC (the `ProposerForHeight` recompute
+allocates an `[]int64` per call). Neither hurts enough at target scale to
+be worth changing. Deferred, with the trigger for revisiting:
+
+- **Per-node priority accumulator** instead of recompute-from-1. Removes
+  the per-call alloc and the `O(height)` factor. Do it if a demo runs long
+  enough for GC pressure to show, or past ~300 validators.
+- **`pending` as `map[int64][]message`** so `waitFor` scans one height's
+  slice, not the whole stash. Past ~300 validators.
+- **Parallel / batched vote verification.** Past ~300 validators, or if the
+  demo host has few cores.
+- **Indexed `StakeOf` / `Contains`.** Cheap, but the profile never showed
+  them, so not now.
+- **In-memory chain pruning** (keep last K blocks per node). If a demo
+  runs unbounded. Otherwise stage 8's business.
 
 ## Stage 8: demo backend
 

@@ -6,16 +6,18 @@ import (
 )
 
 // Validator is one consensus participant: an address, the signing key
-// behind it, and a stake weight. In a real network a node would hold only
-// its own key; here one process simulates every validator, so the key
-// travels with the rest.
+// behind it, a stake weight, and an optional display moniker. In a real
+// network a node would hold only its own key; here one process simulates
+// every validator, so the key travels with the rest.
 type Validator struct {
 	address string
 	privKey ed25519.PrivateKey
 	stake   uint64
+	moniker string
 }
 
 // NewValidator derives a validator from a private key and a stake weight.
+// The moniker starts empty; GenerateValidators sets one.
 func NewValidator(privKey ed25519.PrivateKey, stake uint64) Validator {
 	pubKey := privKey.Public().(ed25519.PublicKey)
 	return Validator{
@@ -28,6 +30,11 @@ func NewValidator(privKey ed25519.PrivateKey, stake uint64) Validator {
 // Address is the validator's chain address.
 func (v Validator) Address() string {
 	return v.address
+}
+
+// Moniker is the validator's display name, or "" if it has none.
+func (v Validator) Moniker() string {
+	return v.moniker
 }
 
 // ValidatorSet is an ordered group of validators. The order fixes the

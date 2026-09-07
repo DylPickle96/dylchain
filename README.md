@@ -22,7 +22,7 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 | 7a | Minting: block reward to the proposer | done |
 | 7b | Equivocation detection | done |
 | 7c | Slashing | done |
-| 7.5 | Scaling pass (hundreds of validators) | not started |
+| 7.5 | Scaling pass (hundreds of validators) | done |
 | 8 | Demo backend (HTTP + SSE, fault injection) | not started |
 | 9 | Explorer UI | not started |
 
@@ -155,8 +155,11 @@ between goroutines does not wedge a round.
 
 `ProposerForHeight` recomputes the priority accumulator from height 1 on
 every call, so it stays a pure function of the height and the set, at
-`O(height * n)` per call. That, and the other `O(n^2)` costs in the vote
-path, are what the stage 7.5 scaling pass addresses.
+`O(height * n)` per call. The vote path is `O(n^2)` per height, dominated
+by ed25519 verification. Measured on an M4 Pro this is ~35 ms/height at 128
+validators and flat over hundreds of heights, which the stage 7.5 notes
+found is fast enough for the demo; the per-node accumulator and batched
+verification are written up there as deferred.
 
 ## Faults
 

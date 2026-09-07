@@ -1,0 +1,4 @@
+# Go test / profiling artifacts
+*.test
+*.out
+*.prof

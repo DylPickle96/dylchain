@@ -223,3 +223,43 @@ func TestClusterCommittedBlocksAreSignedByProposer(t *testing.T) {
 		}
 	}
 }
+
+// A large generated cluster with one faulty validator still reaches
+// consensus on every node and slashes the offender. Skipped under -short.
+func TestClusterLargeWithFault(t *testing.T) {
+	if testing.Short() {
+		t.Skip("large cluster")
+	}
+	const (
+		n       = 64
+		faulty  = 3
+		heights = 40
+	)
+	set := NewValidatorSet(GenerateValidators(n)...)
+	cl := NewCluster(nil, set, 0)
+	cl.MakeFaulty(faulty)
+
+	cl.Run(heights)
+
+	offender := set.members[faulty].address
+	if got := set.StakeOf(offender); got != 0 {
+		t.Errorf("offender stake after run: got %d, want 0", got)
+	}
+	if len(cl.Evidence()) == 0 {
+		t.Error("no equivocation evidence from a run with a faulty node")
+	}
+
+	ref := cl.Chain(0).Blocks[heights].Hash()
+	for i := 0; i < cl.Size(); i++ {
+		ch := cl.Chain(i)
+		if len(ch.Blocks) != heights+1 {
+			t.Errorf("node %d: %d blocks, want %d", i, len(ch.Blocks), heights+1)
+		}
+		if !bytes.Equal(ch.Blocks[heights].Hash(), ref) {
+			t.Errorf("node %d tip hash differs from node 0", i)
+		}
+		if err := ch.Validate(); err != nil {
+			t.Errorf("node %d does not validate: %v", i, err)
+		}
+	}
+}
