@@ -32,8 +32,18 @@ until then.
 | 4 | ed25519 signatures | done |
 | 5 | Merkle root and inclusion proofs | done |
 | 6 | Multiple validators (BFT), one-step vote, happy path | done |
-| 6f | Proposer timeouts, round changes, double-sign detection | next |
-| 7 | Slashing and minting | after 6f |
+| 7a | Minting: block reward to the proposer | next |
+| 7b | Equivocation detection: `Evidence` from conflicting signed messages | after 7a |
+| 7c | Slashing: verified evidence cuts the offender's stake | after 7b |
+| 7.5 | Scaling pass: run hundreds of validators smoothly | after 7c |
+| 8 | Demo backend: long-running cluster, HTTP + SSE, fault injection | after 7.5 |
+| 9 | Explorer UI (React/Vite) | after 8 |
+
+The goal is a portfolio proof of concept: the cluster running live behind
+an explorer-style UI, with a button that makes a validator double-sign so
+you can watch the set catch and slash it. Full unhappy-path BFT (proposer
+timeouts, round changes, prevote + precommit) is out of scope; only the
+double-sign detection that slashing needs is being built.
 
 ## Merkle proofs (done)
 
@@ -115,23 +125,84 @@ Simplifications, all deliberate:
 - `bus` inboxes are fixed 1024-buffer channels. A run producing more than
   that per node would block. Fine at current sizes.
 
-## Stage 6f: liveness and equivocation (next)
+## Stage 6f: dropped
 
-- Proposer timeout, then a round change to the next proposer for the same
-  height.
-- Detect a validator that signs two different blocks, or votes twice, at
-  one height. This is the evidence stage 7 slashing consumes.
-- Probably the point to introduce prevote + precommit if one-step starts
-  feeling too far from real BFT.
+Proposer timeouts, round changes, and prevote + precommit are not being
+built. In a single process with no real network there is nothing to
+recover from, and one-step voting stays as is. The one piece worth having,
+double-sign detection, moved into 7b because slashing needs it.
 
-## Stage 7: slashing and minting
+## Stage 7a: minting
 
-- a validator that double-signs (proposes two different blocks for one
-  round) loses stake
-- a mint function adds tokens per block
-- this is where the proposal 46 question becomes concrete: minted per
-  block vs the size of a PSE release. If minting exceeds the release, the
-  pause is cosmetic.
+Block reward credited to `block.Proposer` in `Apply`, after the
+transaction loop, guarded on `Proposer != ""` so genesis and `AddBlock`
+blocks mint nothing. Deterministic from the header, so `ReplayBlocks` and
+`Validate`'s replay check reproduce it. `BlockReward` constant in
+`coin.go`. Add `State.Supply()` (sum of balances, no burning) for the UI.
+
+The proposal 46 question becomes concrete here: `BlockReward` per block vs
+the size of a PSE release. If minting outruns the release the pause is
+cosmetic. For the toy, pick a round `BlockReward` and note the tension.
+
+## Stage 7b: equivocation detection
+
+Each node keeps a first-seen record per (height, signer). A second signed
+message from that signer for the same height over different content is
+`Evidence{a, b}`. `verifyEvidence`: both signatures valid, same signer,
+conflicting content, same height. The node surfaces evidence on a channel
+or a slice. Detection is deterministic, so every honest node produces the
+same evidence independently. Scoped to height, not (height, round), since
+there are no rounds.
+
+## Stage 7c: slashing
+
+On verified evidence against validator X, cut `X.stake` (a fraction, or to
+zero). Each node applies it directly: detection is deterministic so the
+sets stay in sync without an in-block evidence record. `ValidatorSet`
+gains a `Slash(addr)`, stake is no longer immutable. `TotalStake`,
+proposer weighting, and the 2/3 threshold all shift automatically from the
+next height. Not replayable from the block list, which is the cost of the
+per-node shortcut; documented, acceptable for the demo.
+
+## Stage 7.5: scaling pass
+
+Target ~100 to 200 validators running smoothly, block every 1 to 3
+seconds. The protocol does not change, the data structures do. All the
+current bottlenecks are `O(N^2)` or worse:
+
+- **Priority accumulator on the node.** Advance one step per height
+  instead of recomputing `ProposerForHeight` from height 1. Kills the
+  `O(height)` factor. Needs per-node mutable state that stays in lockstep
+  because every node applies the same step in the same order.
+- **Index `StakeOf` / `Contains`** with a `map[string]...` built at
+  construction, rebuilt on slash.
+- **`pending` as `map[int64]map[string]...`** keyed by (height, signer),
+  so "next uncounted vote" is a lookup, not a slice scan. The current
+  linear scan is `O(N^2)` per node per height.
+- **Inbox buffers `~4*N`**, not a flat 1024, or `broadcast` deadlocks.
+- **Parallel vote verification** (small worker pool). ed25519 verify at
+  `O(N^2)` per height is the CPU wall.
+- **Validator-set generator:** N keypairs, stakes from a Zipf or
+  exponential draw (a few whales, a long tail), normalized to a round
+  total, a moniker each, maybe a fake uptime for the UI.
+
+## Stage 8: demo backend
+
+- `Cluster.RunContext(ctx)`: runs until cancelled, not a fixed height
+  count.
+- A driver goroutine submitting transactions on a timer.
+- `net/http` (stdlib): `GET /state` JSON snapshot (height, validators with
+  stake and voting-power share, balances, supply, recent blocks, slash
+  events), `GET /events` SSE stream, `POST /tx`, `POST /fault` to make a
+  named validator double-sign.
+- Lives in `cmd/` or its own package so `package dyl` stays a pure library.
+
+## Stage 9: explorer UI
+
+React + Vite, a separate frontend project, talks to the stage 8 server.
+Stripped explorer: block feed, validator table with voting-power bars,
+supply counter, event log. The `POST /fault` button is the story: click
+it, a validator's bar drops, a slash event lands in the feed.
 
 ## Parked design questions
 
@@ -163,5 +234,7 @@ Simplifications, all deliberate:
   writes tests. Flag confidence levels explicitly.
 - `gofmt` + `go vet` + `go test -race ./...` before every commit.
 - Commit messages: plain, no co-author line, no em dashes or semicolons.
-- Account model, integer amounts, standard library only.
+- Account model, integer amounts, standard library only. This holds for
+  `package dyl` and the stage 8 backend. The stage 9 UI is a separate
+  React/Vite project and is exempt.
 - Unit tests stay in `*_test.go` beside the code, `package dyl`.

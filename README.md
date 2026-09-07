@@ -19,8 +19,12 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 | 4 | ed25519 transaction signatures | done |
 | 5 | Merkle root and inclusion proofs | done |
 | 6 | Multiple validators (BFT consensus) | done, happy path |
-| 6f | Proposer timeouts, round changes, double-sign detection | not started |
-| 7 | Slashing and minting | not started |
+| 7a | Minting: block reward to the proposer | not started |
+| 7b | Equivocation detection | not started |
+| 7c | Slashing | not started |
+| 7.5 | Scaling pass (hundreds of validators) | not started |
+| 8 | Demo backend (HTTP + SSE, fault injection) | not started |
+| 9 | Explorer UI | not started |
 
 ## Layout
 
@@ -114,28 +118,34 @@ in state, so `ReplayBlocks` can rebuild the ledger from a block list alone.
 
 `Cluster` runs several `Validator` goroutines in one process, joined by an
 in-memory broadcast bus, doing one-step-vote BFT. Each validator keeps its
-own `Chain`, seeded from one shared genesis block. Per height:
+own `Chain`, seeded from one shared genesis block.
 
-1. `ValidatorSet.ProposerForHeight` picks the proposer by stake-weighted
-   priority (CometBFT style): a validator with twice the stake proposes
-   about twice as often, interleaved rather than in a run. Equal stakes
-   reduce to plain round-robin.
-2. The proposer drains the shared `Mempool`, builds a block, signs its
-   header, and broadcasts it.
-3. Every validator checks the block against its own chain and broadcasts a
-   single signed vote for it.
-4. When a validator has counted votes from **more than two thirds of
-   stake** (`3*accepted > 2*total`), it commits the block. Committed is
-   final: no fork choice, no reversion.
+There is no coordinator. Every validator runs the same loop independently,
+one round per height, and agreement falls out of all of them running the
+same code over the same blocks and votes. Only the proposal and the votes
+cross between nodes.
+
+1. Compute the proposer for this height with `ProposerForHeight`
+   (stake-weighted priority, CometBFT style; equal stakes give
+   round-robin). Every node computes the same answer. If it is not you,
+   skip to 3.
+2. Proposer only: drain the shared `Mempool`, build a block, sign its
+   header, broadcast it.
+3. Receive the proposal, check it against your own chain, broadcast one
+   signed vote for it.
+4. Tally incoming votes by stake. Once votes covering **more than two
+   thirds of total stake** are in (`3*accepted > 2*total`), commit. That
+   commit is final: no fork choice, no reversion.
 
 Votes and proposals that arrive out of order (a vote before its proposal, a
 message for a later height) are stashed per node and rescanned, so timing
 between goroutines does not wedge a round.
 
-This is the happy path only. One process, no message loss, every validator
+This is the happy path only: one process, no message loss, every validator
 honest and online. `ProposerForHeight` recomputes the priority accumulator
 from height 1 on every call, so it stays a pure function of the height and
-the set, at `O(height)` per call.
+the set, at `O(height * n)` per call. That, and the other `O(n^2)` costs in
+the vote path, are what the stage 7.5 scaling pass addresses.
 
 ## Validation
 
