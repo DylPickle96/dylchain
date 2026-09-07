@@ -152,11 +152,12 @@ message for a later height) are stashed per node and rescanned, so timing
 between goroutines does not wedge a round.
 
 `ProposerForHeight` recomputes the priority accumulator from height 1 on
-every call, so it stays a pure function of the height and the set, at
-`O(height * n)` per call. The vote path is `O(n^2)` per height, dominated
-by ed25519 verification. Both are comfortable up to a few hundred
-validators; past that the accumulator would move onto each node and
-verification would be batched.
+every call, so it stays a pure function of the height and the set. Tests
+use it. The live cluster instead gives each node an `election` that
+advances the same accumulator one step per height, so a run that lasts for
+weeks does not pay a cost that grows with chain length. The vote path is
+`O(n^2)` per height, dominated by ed25519 verification, which is
+comfortable to a few hundred validators; past that it would be batched.
 
 ## Faults
 
@@ -167,16 +168,19 @@ predicate, so consensus still commits on the honest majority.
 Every node runs `observe` over each message it receives, keeping the first
 vote it saw from each (height, voter). A second, conflicting vote is
 `Evidence`. Once `verifyEvidence` confirms it (both votes validly signed by
-the offender, same height, different block), the node records it and calls
-`ValidatorSet.Slash`, which zeroes that validator's stake. A slashed
-validator is skipped for proposer selection and contributes nothing to the
-two-thirds threshold from then on. `Cluster.Evidence()` gathers what the
-cluster caught, one entry per offender and height.
+the offender, same height, different block), the node records it and
+schedules a slash for `evidence.Height + slashDelay`. Every node has the
+evidence by then, so they all zero that stake at the same height and keep
+computing the same proposer and the same two-thirds threshold. From the
+effective height on, the offender is skipped for proposer selection and
+weighs nothing in the tally. `Cluster.Evidence()` gathers what the cluster
+caught.
 
-This is the only fault handled. Nodes slash independently and off-chain, so
-they can briefly disagree on the set between detections. It is not
-consensus-safe in general; the real fix is recording evidence in a block so
-every node slashes at the same height.
+This is the only fault handled, and it is not the real design: evidence
+lives only in node memory, not in a block, so a chain replayed from its
+blocks alone would not know a validator was slashed. A production chain
+records the evidence on-chain. The fixed `slashDelay` is what keeps the
+in-memory version from letting two nodes disagree on a height.
 
 ## Validation
 
@@ -206,7 +210,8 @@ every node slashes at the same height.
 - No proposer timeout. If a height's proposer never proposes, every node
   blocks waiting for it. Nothing in a single process stalls a proposer, so
   round changes are not built.
-- Slashing is applied per node, off-chain (see Faults).
+- Slash evidence lives in node memory, not in a block, so a chain replayed
+  from its blocks alone would not apply the slash (see Faults).
 
 ## Running the demo
 

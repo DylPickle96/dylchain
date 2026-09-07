@@ -119,12 +119,12 @@ Simplifications, all deliberate:
 - One vote step, not prevote + precommit. A real partition could commit two
   blocks at one height. Two steps with locking is a later pass.
 - `ProposerForHeight` runs the CometBFT priority accumulator (add stake to
-  every priority, highest proposes, winner drops by total stake), but
-  recomputes it from height 1 on every call to stay a pure function, at
-  `O(height * n)`. Ties break by member index, not address. No
-  centering/scaling step: the set is fixed and priorities stay bounded, so
-  it is not needed. If runs ever get long, carry the accumulator on the
-  node instead.
+  every priority, highest proposes, winner drops by total stake). The
+  exported one recomputes from height 1 to stay a pure function, for tests.
+  The live cluster uses `election` (`proposer.go`), a per-node copy of the
+  accumulator advanced one step per height, so cost does not grow with
+  chain length. Ties break by member index, not address. No
+  centering/scaling step: priorities stay bounded, so it is not needed.
 - No proposer timeout. If a height's proposer never proposes, every node
   blocks in `waitFor`. Not fixed (6f dropped); nothing in one process
   stalls a proposer.
@@ -187,26 +187,25 @@ Deliberately left for later:
 
 ## Stage 7c: slashing - done
 
-`observe`, after appending `Evidence`, calls `n.set.Slash(offender)`.
-`ValidatorSet.Slash` sets that validator's stake to zero, idempotently,
-under a write lock. `ValidatorSet` gained a `sync.RWMutex`: `Slash` takes
-the write lock, `TotalStake` / `StakeOf` / `Contains` / `ProposerForHeight`
-take the read lock. `totalStake()` is the unlocked sum, so the locked
-methods can share it without recursive read-locking (an `RWMutex`
-deadlock). `ProposerForHeight` skips zero-stake members when picking a
-winner, so a slashed validator never proposes, but the priorities slice
-stays indexed by member so the schedule shifts as little as possible.
-`Cluster.ValidatorSet()` exposes the set for reading stakes after a run.
+`observe`, after appending `Evidence`, records `pendingSlash[offender] =
+evidence.Height + slashDelay` (2). The node's `run` loop applies pending
+slashes whose effective height has arrived, before that height's proposer
+and threshold are computed, by calling `election.slash` (its own view) and
+`ValidatorSet.Slash` (the shared set, for display). Every node has the
+evidence by the effective height, so they all drop the stake at the same
+height. `ValidatorSet` has a `sync.RWMutex`: `Slash` takes the write lock,
+the readers take the read lock, `totalStake()` is the unlocked sum shared
+by the locked methods (no recursive read-locking). `Cluster.ValidatorSet()`
+exposes the set for reading stakes after a run.
 
-Not consensus-safe, on purpose. Nodes slash at slightly different times, so
-for a window some have the slashed set and some do not, and because
-`ProposerForHeight` recomputes from height 1 they can briefly disagree on
-the upcoming schedule. In the demo shape (a few validators, one
-misbehaving, roughly equal stake) 3 of 4 clears two thirds either way so it
-does not stall, but the real fix is evidence in a block so every node
-applies the slash at the same height. Not replayable from the block list
-for the same reason. If `TestClusterSlashesDoubleVoter` ever flakes, that
-is the escalation.
+The proposer accumulator and the commit threshold both come from the
+node's `election`, not the shared set, and the slash is scheduled rather
+than applied immediately. Before that (see git history) an immediate
+`Slash` could let one node compute a height's proposer post-slash while
+another computed it pre-slash: two proposals for one height, split votes,
+permanent stall. Still not the real design, though: evidence lives in node
+memory, not in a block, so a chain replayed from its blocks alone would
+not know a validator was slashed.
 
 ## Stage 7.5: scaling pass - done, mostly by measuring
 
@@ -228,13 +227,10 @@ a correctness fix: a fixed 1024 overflows and deadlocks `broadcast` above
 
 The profile at n=128 is ~48% ed25519 vote verification (`O(N^2)` per
 height, but height-independent and already spread across the node
-goroutines) and ~33% allocation/GC (the `ProposerForHeight` recompute
-allocates an `[]int64` per call). Neither hurts enough at target scale to
-be worth changing. Deferred, with the trigger for revisiting:
+goroutines) and ~33% allocation/GC. Deferred at the time; the audit
+(stage 8, see below) then made the per-node accumulator load-bearing for a
+weeks-long run and it was done. Still deferred, with the trigger:
 
-- **Per-node priority accumulator** instead of recompute-from-1. Removes
-  the per-call alloc and the `O(height)` factor. Do it if a demo runs long
-  enough for GC pressure to show, or past ~300 validators.
 - **`pending` as `map[int64][]message`** so `waitFor` scans one height's
   slice, not the whole stash. Past ~300 validators.
 - **Parallel / batched vote verification.** Past ~300 validators, or if the
@@ -242,7 +238,7 @@ be worth changing. Deferred, with the trigger for revisiting:
 - **Indexed `StakeOf` / `Contains`.** Cheap, but the profile never showed
   them, so not now.
 - **In-memory chain pruning** (keep last K blocks per node). If a demo
-  runs unbounded. Otherwise stage 8's business.
+  runs unbounded; `seenVotes` is already pruned, `Chain.Blocks` is not.
 
 ## Stage 8a: live-cluster primitives - done
 
@@ -305,20 +301,41 @@ Config: `-validators` (20), `-addr` (:8080), `-block-time` (1s),
 The endpoint is meant to be pointed at the public internet on a cheap
 host, so a stranger must not be able to spend the compute budget.
 
+Most of this list is the second pass, after an Opus subagent audit (see
+git log around "audit follow-up").
+
 - `-validators` is a flag, not a request parameter, and must stay that
   way: cluster cost is `O(n^2)` verifications per height.
 - `maxBlockTxs` is 64, so proposer work per block is bounded no matter how
   big the mempool grows. The mempool itself caps at 10000
   (`chain.ErrMempoolFull`, a 429).
-- `/tx` and `/faucet` share a token bucket (5/s, burst 20; 429 past it).
-  `/faucet` also keeps its per-address 30s limit.
+- `Submit` validates `tx.To` as a real address, and `applyTx` does too, so
+  junk recipients cannot enter the ledger or the seen list.
+- `/tx`, `/faucet`, `/fault` go through a per-IP token bucket (5/s, burst
+  20) in a bounded FIFO of 4096 IPs plus a global ceiling, so one client
+  cannot 429 everyone. `/state` and `/account` go through a looser per-IP
+  bucket (30/s, burst 60). `/faucet` also keeps its per-address 30s limit.
+- `/faucet` rejects its own address and non-addresses before signing, and
+  `signFrom` returns a rollback for the reserved nonce, so a rejected send
+  cannot leave the faucet's local nonce ahead of the chain forever.
 - `/fault` refuses (409) once faulty-plus-slashed stake would reach a
-  third of the original total, so the honest set can always still make two
-  thirds and the demo recovers.
-- `/events` caps at 512 concurrent streams (503 past it).
+  third of the original total, and returns early (202, no work) when the
+  index is already faulty.
+- The seen-address list is a bounded FIFO (500), evicting the oldest,
+  instead of an unbounded map that `/state` re-serialised in full.
+- `seenVotes` on each node is pruned to a two-height window; without that
+  it grew ~70 KB/height forever.
+- `/events` caps at 512 streams in total and 3 per IP (503 past either),
+  closes a connection after 30 min, and writes with a deadline so a client
+  that stops reading errors out instead of parking a goroutine.
 - `http.Server` has `ReadHeaderTimeout` and `IdleTimeout` (no
   `WriteTimeout`, it would cut the SSE stream); POST bodies are capped at
   16 KiB with `http.MaxBytesReader`.
+
+Left as gold-plating for a toy: directory-listing / dotfile exposure if
+`web/dist` is ever served by the bare `http.FileServer`, `uint64` amount
+overflow in demo math, and a consensus-disagreement `panic` that kills the
+process instead of halting one node.
 
 ## Stage 9: explorer UI
 
