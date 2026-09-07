@@ -23,7 +23,8 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 | 7b | Equivocation detection | done |
 | 7c | Slashing | done |
 | 7.5 | Scaling pass (hundreds of validators) | done |
-| 8 | Demo backend (HTTP + SSE, fault injection) | not started |
+| 8a | Live-cluster primitives | done |
+| 8b | Demo backend (HTTP + SSE server) | not started |
 | 9 | Explorer UI | not started |
 
 ## Layout

@@ -8,7 +8,7 @@ Stages 1 to 6 done (BFT consensus, happy path only). 7a: blocks mint a
 reward to their proposer. 7b: nodes catch a validator that double-votes.
 7c: a caught double-voter is slashed to zero stake. 7.5: measured, the
 cluster already scales to ~200 validators, only the inbox buffer needed a
-fix. Stage 8 (demo backend) is next.
+fix. Stage 8a done (live-cluster primitives: RunContext, Snapshot, events). 8b (the HTTP server) is next.
 
 Stage 6 tip:
 
@@ -43,8 +43,9 @@ the genesis allocation and grows by `BlockReward` per committed block.
 | 7b | Equivocation detection: `Evidence` from conflicting signed messages | done |
 | 7c | Slashing: verified evidence cuts the offender's stake | done |
 | 7.5 | Scaling pass: run hundreds of validators smoothly | done |
-| 8 | Demo backend: long-running cluster, HTTP + SSE, fault injection | next |
-| 9 | Explorer UI (React/Vite) | after 8 |
+| 8a | Live-cluster primitives (RunContext, Snapshot, events) | done |
+| 8b | Demo backend: HTTP + SSE server, tx driver | next |
+| 9 | Explorer UI (React/Vite) | after 8b |
 
 The goal is a portfolio proof of concept: the cluster running live behind
 an explorer-style UI, with a button that makes a validator double-sign so
@@ -243,16 +244,40 @@ be worth changing. Deferred, with the trigger for revisiting:
 - **In-memory chain pruning** (keep last K blocks per node). If a demo
   runs unbounded. Otherwise stage 8's business.
 
-## Stage 8: demo backend
+## Stage 8a: live-cluster primitives - done
 
-- `Cluster.RunContext(ctx)`: runs until cancelled, not a fixed height
-  count.
-- A driver goroutine submitting transactions on a timer.
-- `net/http` (stdlib): `GET /state` JSON snapshot (height, validators with
-  stake and voting-power share, balances, supply, recent blocks, slash
-  events), `GET /events` SSE stream, `POST /tx`, `POST /fault` to make a
-  named validator double-sign.
-- Lives in `cmd/` or its own package so `package chain` stays a pure library.
+`chain/` grew what a long-running server needs:
+
+- `Cluster.RunContext(ctx)` runs until cancelled. Nodes select on
+  `ctx.Done()` inside `waitFor` and unwind via an `errStopped` panic that
+  `run` recovers, so `wg.Wait()` returns promptly after cancel. `Run(n)` is
+  now `drive(context.Background(), n)`.
+- `Submit(tx) error` verifies the signature and rejects a malformed
+  transaction at the door. Nonce and balance are still left to apply time.
+- `propose` runs `applicable`, which keeps only the transactions that apply
+  in order against current state and drops the rest, so a bad browser
+  transaction can no longer panic a proposer in `checkCandidate`. Dropped
+  transactions are gone (already drained from the mempool).
+- The first node to commit each height calls `Cluster.recordBlock`, which
+  advances a mutex-guarded live view (height, supply, recent blocks,
+  per-proposer count, balances, nonces) and emits a `block` event.
+  `observe` calls `recordSlash` on the first slash of an offender, emitting
+  a `slash` event.
+- `Snapshot()` copies that view plus per-validator stake and voting-power
+  share under the set's read lock. `Account(addr)` returns balance and
+  nonce. `Subscribe()` / `Unsubscribe()` hand out buffered `Event`
+  channels; a full channel drops the event rather than stalling consensus.
+
+## Stage 8b: the server - next
+
+- `cmd/dyld/`: boot N validators via `GenerateValidators`, genesis-fund a
+  faucet wallet and a few named demo accounts (treasury, alice, bob,
+  carol), run `RunContext` and a transaction-driver goroutine.
+- `net/http` (stdlib): `GET /state` (Snapshot plus demo accounts and seen
+  addresses), `GET /events` (SSE over Subscribe), `GET /account`,
+  `POST /tx` (signed Transaction JSON), `POST /faucet`, `POST /fault`.
+- Track "seen addresses" in the server from `/tx` and `/faucet` traffic.
+- Serve `web/dist` so the whole demo is one binary.
 
 ## Stage 9: explorer UI
 

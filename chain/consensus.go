@@ -2,13 +2,19 @@ package chain
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"time"
 )
 
 // This file implements one-step-vote BFT consensus for a single process.
+
+// errStopped unwinds a node's goroutine when its context is cancelled. It
+// is raised from waitFor and recovered in run.
+var errStopped = errors.New("consensus stopped")
 
 // message is anything that travels on the bus.
 type message interface {
@@ -106,6 +112,8 @@ type node struct {
 	mempool     *Mempool
 	inbox       chan message
 	bus         *bus
+	cluster     *Cluster
+	ctx         context.Context
 	maxBlockTxs int
 	pending     []message
 	seenVotes   map[int64]map[string]vote
@@ -113,9 +121,18 @@ type node struct {
 	byzantine   bool
 }
 
-// run drives the node through heights 1..heights, one block per height.
-func (n *node) run(heights int64) {
-	for h := int64(1); h <= heights; h++ {
+// run drives the node one block per height. It stops after maxHeight, or
+// runs until the context is cancelled if maxHeight is zero or less.
+func (n *node) run(maxHeight int64) {
+	defer func() {
+		if r := recover(); r != nil && r != errStopped {
+			panic(r)
+		}
+	}()
+	for h := int64(1); maxHeight <= 0 || h <= maxHeight; h++ {
+		if n.ctx.Err() != nil {
+			return
+		}
 		n.runHeight(h)
 		n.prunePending(h)
 	}
@@ -174,13 +191,15 @@ func (n *node) runHeight(h int64) {
 	if err := n.chain.CommitBlock(candidate); err != nil {
 		panic(fmt.Sprintf("validator %s failed to commit block %d: %v", n.self.address, h, err))
 	}
+	n.cluster.recordBlock(candidate, n.chain.state)
 }
 
-// propose drains the mempool, builds a block for height h off the chain's
-// tip, signs its header, and returns it. Only the proposer calls this, and
-// it broadcasts the whole block, so every node commits identical bytes.
+// propose drains the mempool, drops any transaction that does not apply
+// against current state, builds a block for height h off the chain's tip,
+// signs its header, and returns it. Only the proposer calls this, and it
+// broadcasts the whole block, so every node commits identical bytes.
 func (n *node) propose(h int64) Block {
-	txs := n.mempool.Drain(n.maxBlockTxs)
+	txs := applicable(n.chain.state, n.mempool.Drain(n.maxBlockTxs))
 	tip := n.chain.Blocks[len(n.chain.Blocks)-1]
 	b := Block{
 		Transactions: txs,
@@ -192,6 +211,27 @@ func (n *node) propose(h int64) Block {
 	}
 	b.Signature = b.sign(n.self.privKey)
 	return b
+}
+
+// applicable returns the subset of txs that apply cleanly, in order,
+// against st. A transaction that fails (bad nonce, insufficient balance) is
+// dropped rather than dragging the whole block down. It stays dropped: the
+// caller has already taken it out of the mempool.
+func applicable(st State, txs []Transaction) []Transaction {
+	if len(txs) == 0 {
+		return txs
+	}
+	kept := txs[:0]
+	cur := st
+	for _, tx := range txs {
+		next, err := Apply(cur, Block{Transactions: []Transaction{tx}})
+		if err != nil {
+			continue
+		}
+		cur = next
+		kept = append(kept, tx)
+	}
+	return kept
 }
 
 // waitFor returns the first message, from the stash or the inbox, that
@@ -209,7 +249,12 @@ func (n *node) waitFor(match func(message) bool) message {
 	// 2. otherwise pull from the inbox until something fits,
 	//    stashing everything that doesn't
 	for {
-		m := <-n.inbox
+		var m message
+		select {
+		case m = <-n.inbox:
+		case <-n.ctx.Done():
+			panic(errStopped)
+		}
 		n.observe(m)
 		if match(m) {
 			return m
@@ -255,9 +300,9 @@ func (n *node) observe(m message) {
 		if verifyEvidence(e) {
 			n.evidence = append(n.evidence, e)
 			n.set.Slash(e.Offender)
+			n.cluster.recordSlash(e.Offender, e.Height)
 		}
 	}
-
 }
 
 // msgHeight is the height a message concerns, for prunePending.
