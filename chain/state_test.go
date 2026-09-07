@@ -265,3 +265,17 @@ func TestApplyNonceSequenceAcrossBlocks(t *testing.T) {
 		t.Fatal("replaying nonce 0 should be rejected")
 	}
 }
+
+// A transaction to an address that is not a well-formed key is rejected,
+// so junk recipients never enter the ledger.
+func TestApplyRejectsBadRecipient(t *testing.T) {
+	alice := newWallet(t)
+	s := NewState(map[string]uint64{alice.addr: 1000})
+
+	tx := Transaction{From: alice.addr, To: "not-an-address", Amount: 10, Nonce: 0}
+	tx.Signature = tx.Sign(alice.priv)
+
+	if _, err := Apply(s, block(tx)); err == nil {
+		t.Fatal("transaction to a malformed address should be rejected")
+	}
+}

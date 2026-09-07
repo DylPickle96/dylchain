@@ -105,6 +105,7 @@ func NewCluster(alloc map[string]uint64, set *ValidatorSet, maxBlockTxs int) *Cl
 			ctx:         context.Background(),
 			maxBlockTxs: maxBlockTxs,
 			seenVotes:   make(map[int64]map[string]vote),
+			slashed:     make(map[string]bool),
 		})
 	}
 
@@ -117,17 +118,20 @@ func NewCluster(alloc map[string]uint64, set *ValidatorSet, maxBlockTxs int) *Cl
 	return c
 }
 
-// Submit validates a transaction's signature and adds it to the shared
-// mempool. It rejects a malformed or badly signed transaction so it can
-// never reach a proposer. Nonce and balance are checked later, when a
-// proposer tries to apply it.
+// Submit validates a transaction and adds it to the shared mempool. It
+// rejects anything malformed, badly addressed, or badly signed, so junk
+// never reaches a proposer or the seen-address list. Nonce and balance are
+// checked later, when a proposer tries to apply it.
 func (c *Cluster) Submit(tx Transaction) error {
-	if tx.From == "" || tx.From == tx.To || tx.Amount == 0 {
+	if tx.From == tx.To || tx.Amount == 0 {
 		return fmt.Errorf("malformed transaction")
 	}
 	pub, err := pubKeyFromAddress(tx.From)
 	if err != nil {
 		return fmt.Errorf("bad sender address: %w", err)
+	}
+	if _, err := pubKeyFromAddress(tx.To); err != nil {
+		return fmt.Errorf("bad recipient address: %w", err)
 	}
 	if !ed25519.Verify(pub, tx.signableBytes(), tx.Signature) {
 		return fmt.Errorf("invalid signature")

@@ -135,11 +135,11 @@ func TestClusterCatchesDoubleVoter(t *testing.T) {
 
 	offender := set.members[2].address
 
-	// Every equivocation is caught except possibly the last height's, since
-	// nothing drains a node's inbox once its run loop ends.
+	// The double-vote is caught at least once. Once an offender is slashed,
+	// nodes stop recording further evidence for it, so the count is small.
 	ev := cl.Evidence()
-	if len(ev) < heights-1 {
-		t.Errorf("caught %d equivocations, want at least %d of %d", len(ev), heights-1, heights)
+	if len(ev) == 0 {
+		t.Fatal("double-voter went undetected")
 	}
 	for _, e := range ev {
 		if e.Offender != offender {

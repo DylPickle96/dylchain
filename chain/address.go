@@ -22,6 +22,13 @@ func AddressFromKey(publicKey ed25519.PublicKey) string {
 	return deriveAddress(publicKey)
 }
 
+// ValidAddress reports whether addr is a well-formed dyl address: the
+// prefix followed by the hex of an ed25519 public key.
+func ValidAddress(addr string) bool {
+	_, err := pubKeyFromAddress(addr)
+	return err == nil
+}
+
 // pubKeyFromAddress reverses deriveAddress, rejecting a missing prefix,
 // invalid hex, or the wrong key length.
 func pubKeyFromAddress(address string) (ed25519.PublicKey, error) {

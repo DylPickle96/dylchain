@@ -120,8 +120,14 @@ type node struct {
 	pending     []message
 	seenVotes   map[int64]map[string]vote
 	evidence    []Evidence
-	byzantine   atomic.Bool // set by MakeFaulty, possibly mid-run
+	slashed     map[string]bool // offenders already slashed, to stop re-slashing
+	byzantine   atomic.Bool     // set by MakeFaulty, possibly mid-run
 }
+
+// voteMemory is how many past heights of first-seen votes a node keeps for
+// equivocation detection. Two is enough: both votes of a double-vote are in
+// flight within a height of each other.
+const voteMemory = 2
 
 // run drives the node one block per height. It stops after maxHeight, or
 // runs until the context is cancelled if maxHeight is zero or less.
@@ -137,6 +143,11 @@ func (n *node) run(maxHeight int64) {
 		}
 		n.runHeight(h)
 		n.prunePending(h)
+		for hh := range n.seenVotes {
+			if hh <= h-voteMemory {
+				delete(n.seenVotes, hh)
+			}
+		}
 		if n.minInterval > 0 {
 			select {
 			case <-time.After(n.minInterval):
@@ -225,20 +236,18 @@ func (n *node) propose(h int64) Block {
 // applicable returns the subset of txs that apply cleanly, in order,
 // against st. A transaction that fails (bad nonce, insufficient balance) is
 // dropped rather than dragging the whole block down. It stays dropped: the
-// caller has already taken it out of the mempool.
+// caller has already taken it out of the mempool. It clones state once and
+// mutates it in place, so the cost is one ledger copy, not one per tx.
 func applicable(st State, txs []Transaction) []Transaction {
 	if len(txs) == 0 {
 		return txs
 	}
+	working := st.clone()
 	kept := txs[:0]
-	cur := st
 	for _, tx := range txs {
-		next, err := Apply(cur, Block{Transactions: []Transaction{tx}})
-		if err != nil {
-			continue
+		if applyTx(&working, tx) == nil {
+			kept = append(kept, tx)
 		}
-		cur = next
-		kept = append(kept, tx)
 	}
 	return kept
 }
@@ -287,13 +296,18 @@ func (n *node) prunePending(h int64) {
 // observe runs on every message a node pulls off the inbox. It keeps the
 // first vote it saw from each (height, voter); a second, conflicting vote
 // is equivocation, which it verifies, records as Evidence, and slashes the
-// offender for.
+// offender for. An offender already slashed is ignored, so a validator that
+// keeps double-voting after the fact does not grow evidence or re-take the
+// set's write lock every height.
 func (n *node) observe(m message) {
 	vm, ok := m.(voteMsg)
 	if !ok {
 		return
 	}
 	v := vm.vote
+	if n.slashed[v.voter] {
+		return
+	}
 	byHeight := n.seenVotes[v.height]
 	if byHeight == nil {
 		byHeight = map[string]vote{}
@@ -308,6 +322,7 @@ func (n *node) observe(m message) {
 		e := Evidence{Offender: v.voter, Height: v.height, VoteA: prev, VoteB: v}
 		if verifyEvidence(e) {
 			n.evidence = append(n.evidence, e)
+			n.slashed[v.voter] = true
 			n.set.Slash(e.Offender)
 			n.cluster.recordSlash(e.Offender, e.Height)
 		}

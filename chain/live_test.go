@@ -112,6 +112,25 @@ func TestSubmitValidatesSignature(t *testing.T) {
 	if err := cl.Submit(tx(alice.addr, alice.addr, 10, 0)); err == nil {
 		t.Error("self-send was accepted")
 	}
+
+	toJunk := Transaction{From: alice.addr, To: "not-an-address", Amount: 10, Nonce: 3}
+	toJunk.Signature = toJunk.Sign(alice.priv)
+	if err := cl.Submit(toJunk); err == nil {
+		t.Error("transaction to a malformed address was accepted")
+	}
+}
+
+// A node keeps only a bounded window of past votes for equivocation
+// detection, so memory does not grow with chain length.
+func TestSeenVotesPruned(t *testing.T) {
+	cl := NewCluster(nil, fourValidators(t), 0)
+	cl.Run(30)
+
+	for i := 0; i < cl.Size(); i++ {
+		if got := len(cl.nodes[i].seenVotes); got > voteMemory+1 {
+			t.Errorf("node %d retains %d heights of votes, want <= %d", i, got, voteMemory+1)
+		}
+	}
 }
 
 // A well-signed transaction that cannot apply (here, a nonce far in the
