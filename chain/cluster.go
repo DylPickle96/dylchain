@@ -140,7 +140,7 @@ func (c *Cluster) Submit(tx Transaction) error {
 // goroutine per node, and returns once all of them have committed that
 // many blocks.
 func (c *Cluster) Run(heights int64) {
-	c.drive(context.Background(), heights)
+	c.drive(heights)
 }
 
 // RunContext drives every validator until ctx is cancelled, then returns
@@ -149,7 +149,7 @@ func (c *Cluster) RunContext(ctx context.Context) {
 	for _, n := range c.nodes {
 		n.ctx = ctx
 	}
-	c.drive(ctx, 0)
+	c.drive(0)
 }
 
 // PaceBlocks makes every node pause d between committing one block and
@@ -161,7 +161,7 @@ func (c *Cluster) PaceBlocks(d time.Duration) {
 	}
 }
 
-func (c *Cluster) drive(ctx context.Context, maxHeight int64) {
+func (c *Cluster) drive(maxHeight int64) {
 	var wg sync.WaitGroup
 	for _, n := range c.nodes {
 		wg.Add(1)

@@ -139,10 +139,14 @@ func readFirstEvent(t *testing.T, url string) <-chan string {
 			return
 		}
 		defer resp.Body.Close()
-		sc := bufio.NewScanner(resp.Body)
-		for sc.Scan() {
-			if line := sc.Text(); strings.HasPrefix(line, "data: ") {
-				out <- strings.TrimPrefix(line, "data: ")
+		br := bufio.NewReader(resp.Body)
+		for {
+			line, err := br.ReadString('\n')
+			if err != nil {
+				return
+			}
+			if data, ok := strings.CutPrefix(strings.TrimRight(line, "\n"), "data: "); ok {
+				out <- data
 				return
 			}
 		}

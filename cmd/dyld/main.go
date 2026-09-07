@@ -177,7 +177,7 @@ type accountView struct {
 	Balance uint64 `json:"balance"`
 }
 
-func (s *server) handleState(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleState(w http.ResponseWriter, _ *http.Request) {
 	snap := s.cluster.Snapshot()
 
 	accounts := make([]accountView, 0, len(s.accounts)+1)
