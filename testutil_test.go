@@ -3,6 +3,7 @@ package dyl
 import (
 	"crypto/ed25519"
 	"testing"
+	"time"
 )
 
 // block wraps transactions into a Block for tests that exercise Apply
@@ -50,4 +51,22 @@ func mustAdd(t *testing.T, c *Chain, txns ...Transaction) {
 	if err := c.AddBlock(txns); err != nil {
 		t.Fatalf("AddBlock at height %d: %v", len(c.Blocks), err)
 	}
+}
+
+// proposeBlock builds a well-formed candidate block for c's next height,
+// carrying txns, proposed and signed by w. Tests mutate the result to
+// exercise the checks in checkCandidate and Validate.
+func (w wallet) proposeBlock(t *testing.T, c *Chain, txns ...Transaction) Block {
+	t.Helper()
+	tip := c.Blocks[len(c.Blocks)-1]
+	b := Block{
+		Transactions: txns,
+		TxRoot:       merkleRoot(txns),
+		PreviousHash: tip.Hash(),
+		CreatedAt:    time.Now().Unix(),
+		Height:       tip.Height + 1,
+		Proposer:     w.addr,
+	}
+	b.Signature = b.sign(w.priv)
+	return b
 }

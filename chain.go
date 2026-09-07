@@ -61,6 +61,11 @@ func (c *Chain) AddBlock(tx []Transaction) error {
 func (c *Chain) Validate() error {
 	// Per block: the transaction body matches the root in the header.
 	for i, b := range c.Blocks {
+		if b.Proposer != "" {
+			if err := verifyBlockSignature(b); err != nil {
+				return fmt.Errorf("block %d: %w", i, err)
+			}
+		}
 		if !bytes.Equal(b.TxRoot, merkleRoot(b.Transactions)) {
 			return fmt.Errorf("block %d: TxRoot does not match the Merkle root of its transactions", i)
 		}
@@ -86,4 +91,38 @@ func (c *Chain) Validate() error {
 	}
 	return nil
 
+}
+
+func (c *Chain) CommitBlock(b Block) error {
+	next, err := c.checkCandidate(b)
+	if err != nil {
+		return fmt.Errorf("commit block %d: %w", b.Height, err)
+	}
+	c.state = next
+	c.Blocks = append(c.Blocks, b)
+	return nil
+}
+
+func (c *Chain) checkCandidate(b Block) (State, error) {
+	tip := c.Blocks[len(c.Blocks)-1]
+	if b.Height != tip.Height+1 {
+		return State{}, fmt.Errorf("candidate block height does not follow previous tip")
+	}
+	if !bytes.Equal(b.PreviousHash, tip.Hash()) {
+		return State{}, fmt.Errorf("candidate block previous hash does not equal tip's hash")
+	}
+	if !bytes.Equal(b.TxRoot, merkleRoot(b.Transactions)) {
+		return State{}, fmt.Errorf("transaction root does not equal computed root")
+	}
+	if b.Proposer == "" {
+		return State{}, fmt.Errorf("block must have proposer")
+	}
+	if err := verifyBlockSignature(b); err != nil {
+		return State{}, fmt.Errorf("issue verifying block signature: %w", err)
+	}
+	next, err := Apply(c.state, b)
+	if err != nil {
+		return State{}, fmt.Errorf("cannot apply block: %w", err)
+	}
+	return next, nil
 }

@@ -231,6 +231,86 @@ func TestValidateDetectsBrokenHeightSequence(t *testing.T) {
 	}
 }
 
+// CommitBlock accepts a well-formed signed candidate, links it, advances
+// state, and leaves a chain that still validates.
+func TestCommitBlockAppendsAndAdvances(t *testing.T) {
+	alice := newWallet(t)
+	bob := newWallet(t)
+	proposer := newWallet(t)
+	c := NewChain(map[string]uint64{alice.addr: 1000})
+
+	b := proposer.proposeBlock(t, &c, alice.send(t, bob.addr, 100, 0))
+	if err := c.CommitBlock(b); err != nil {
+		t.Fatalf("CommitBlock rejected a valid candidate: %v", err)
+	}
+
+	if len(c.Blocks) != 2 {
+		t.Fatalf("got %d blocks, want 2 (genesis + 1)", len(c.Blocks))
+	}
+	if got := c.state.Balances[bob.addr]; got != 100 {
+		t.Errorf("bob balance: got %d, want 100", got)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("committed chain should validate: %v", err)
+	}
+}
+
+// CommitBlock rejects a candidate whose checks fail, and leaves the chain
+// untouched.
+func TestCommitBlockRejects(t *testing.T) {
+	alice := newWallet(t)
+	bob := newWallet(t)
+	proposer := newWallet(t)
+
+	cases := []struct {
+		name   string
+		mutate func(*Block)
+	}{
+		{"wrong height", func(b *Block) { b.Height = 99 }},
+		{"broken link", func(b *Block) { b.PreviousHash = []byte("nope") }},
+		{"tx root mismatch", func(b *Block) { b.TxRoot = merkleRoot(nil) }},
+		{"no proposer", func(b *Block) { b.Proposer = ""; b.Signature = nil }},
+		{"bad signature", func(b *Block) { b.Signature = []byte("garbage") }},
+		{"tampered after signing", func(b *Block) { b.CreatedAt++ }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewChain(map[string]uint64{alice.addr: 1000})
+			b := proposer.proposeBlock(t, &c, alice.send(t, bob.addr, 10, 0))
+			tc.mutate(&b)
+
+			if err := c.CommitBlock(b); err == nil {
+				t.Fatal("expected CommitBlock to reject the candidate, got nil")
+			}
+			if len(c.Blocks) != 1 {
+				t.Errorf("rejected candidate was appended: chain has %d blocks", len(c.Blocks))
+			}
+		})
+	}
+}
+
+// A consensus block's proposer signature covers its whole header, so a
+// later rewrite of a header field that nothing links to is caught. This is
+// the gap that stays open on the unsigned AddBlock path.
+func TestValidateCatchesTamperedConsensusHeader(t *testing.T) {
+	alice := newWallet(t)
+	bob := newWallet(t)
+	proposer := newWallet(t)
+	c := NewChain(map[string]uint64{alice.addr: 1000})
+
+	b := proposer.proposeBlock(t, &c, alice.send(t, bob.addr, 10, 0))
+	if err := c.CommitBlock(b); err != nil {
+		t.Fatalf("CommitBlock: %v", err)
+	}
+
+	c.Blocks[1].CreatedAt++ // value field, only this chain's copy
+
+	if err := c.Validate(); err == nil {
+		t.Fatal("tampered consensus header should fail validation, got nil error")
+	}
+}
+
 // AddBlock on a zero-value Chain panics rather than silently building a
 // chain with no genesis.
 func TestAddBlockPanicsWithoutGenesis(t *testing.T) {
