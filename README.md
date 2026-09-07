@@ -21,7 +21,7 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 | 6 | Multiple validators (BFT consensus) | done, happy path |
 | 7a | Minting: block reward to the proposer | done |
 | 7b | Equivocation detection | done |
-| 7c | Slashing | not started |
+| 7c | Slashing | done |
 | 7.5 | Scaling pass (hundreds of validators) | not started |
 | 8 | Demo backend (HTTP + SSE, fault injection) | not started |
 | 9 | Explorer UI | not started |

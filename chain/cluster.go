@@ -105,3 +105,8 @@ func (c *Cluster) Evidence() []Evidence {
 	}
 	return out
 }
+
+// ValidatorSet returns the cluster's set, for reading stakes after a run.
+func (c *Cluster) ValidatorSet() *ValidatorSet {
+	return c.set
+}

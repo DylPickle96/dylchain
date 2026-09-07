@@ -1,6 +1,9 @@
 package chain
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
 // NewValidator derives the same address as a wallet holding the same key.
 func TestNewValidatorDerivesAddress(t *testing.T) {
@@ -121,5 +124,83 @@ func TestValidatorSetLookup(t *testing.T) {
 	}
 	if set.Contains(stranger.addr) {
 		t.Error("Contains(stranger): got true, want false")
+	}
+}
+
+// Slash zeroes a validator's stake, drops it from the total, and is a
+// no-op on repeat calls or an unknown address.
+func TestSlash(t *testing.T) {
+	a := NewValidator(newWallet(t).priv, 10)
+	b := NewValidator(newWallet(t).priv, 25)
+	set := NewValidatorSet(a, b)
+
+	set.Slash(a.address)
+	if got := set.StakeOf(a.address); got != 0 {
+		t.Errorf("slashed stake: got %d, want 0", got)
+	}
+	if got := set.TotalStake(); got != 25 {
+		t.Errorf("total after slash: got %d, want 25", got)
+	}
+
+	set.Slash(a.address)
+	set.Slash("dylnot-a-member")
+	if got := set.TotalStake(); got != 25 {
+		t.Errorf("total after a repeat slash and a stranger: got %d, want 25", got)
+	}
+}
+
+// A slashed validator is never selected as proposer; the ones left keep
+// rotating and take every height.
+func TestProposerForHeightSkipsSlashed(t *testing.T) {
+	a := NewValidator(newWallet(t).priv, 1)
+	b := NewValidator(newWallet(t).priv, 1)
+	c := NewValidator(newWallet(t).priv, 1)
+	set := NewValidatorSet(a, b, c)
+
+	set.Slash(b.address)
+
+	seen := map[string]int{}
+	for h := int64(1); h <= 30; h++ {
+		seen[set.ProposerForHeight(h).address]++
+	}
+	if seen[b.address] != 0 {
+		t.Errorf("slashed validator proposed %d times, want 0", seen[b.address])
+	}
+	if seen[a.address] == 0 || seen[c.address] == 0 {
+		t.Errorf("live validators should still propose: a=%d c=%d", seen[a.address], seen[c.address])
+	}
+	if seen[a.address]+seen[c.address] != 30 {
+		t.Errorf("live validators should take every height, got %d of 30", seen[a.address]+seen[c.address])
+	}
+}
+
+// Slash and the read methods are safe to call concurrently.
+func TestSlashIsConcurrencySafe(t *testing.T) {
+	var members []Validator
+	for i := 0; i < 5; i++ {
+		members = append(members, NewValidator(newWallet(t).priv, 10))
+	}
+	set := NewValidatorSet(members...)
+	target := members[2].address
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			set.Slash(target)
+			_ = set.TotalStake()
+			_ = set.StakeOf(target)
+			_ = set.Contains(target)
+			_ = set.ProposerForHeight(7)
+		}()
+	}
+	wg.Wait()
+
+	if got := set.StakeOf(target); got != 0 {
+		t.Errorf("after concurrent slashing: stake %d, want 0", got)
+	}
+	if got := set.TotalStake(); got != 40 {
+		t.Errorf("total: got %d, want 40", got)
 	}
 }

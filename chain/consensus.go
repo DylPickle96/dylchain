@@ -240,10 +240,13 @@ func (n *node) observe(m message) {
 		return
 	}
 	if !bytes.Equal(prev.blockHash, v.blockHash) {
-		n.evidence = append(n.evidence, Evidence{
-			Offender: v.voter, Height: v.height, VoteA: prev, VoteB: v,
-		})
+		e := Evidence{Offender: v.voter, Height: v.height, VoteA: prev, VoteB: v}
+		if verifyEvidence(e) {
+			n.evidence = append(n.evidence, e)
+			n.set.Slash(e.Offender)
+		}
 	}
+
 }
 
 // msgHeight is the height a message concerns, for prunePending.

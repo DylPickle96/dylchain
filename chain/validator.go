@@ -1,6 +1,9 @@
 package chain
 
-import "crypto/ed25519"
+import (
+	"crypto/ed25519"
+	"sync"
+)
 
 // Validator is one consensus participant: an address, the signing key
 // behind it, and a stake weight. In a real network a node would hold only
@@ -30,6 +33,7 @@ func (v Validator) Address() string {
 // ValidatorSet is an ordered group of validators. The order fixes the
 // proposer rotation; the stakes fix the commit threshold.
 type ValidatorSet struct {
+	mu      sync.RWMutex
 	members []Validator
 }
 
@@ -38,13 +42,19 @@ func NewValidatorSet(members ...Validator) *ValidatorSet {
 	return &ValidatorSet{members: members}
 }
 
+func (vs *ValidatorSet) totalStake() uint64 { // caller holds the lock
+	var t uint64
+	for _, v := range vs.members {
+		t += v.stake
+	}
+	return t
+}
+
 // TotalStake is the sum of every member's stake.
 func (vs *ValidatorSet) TotalStake() uint64 {
-	var staked uint64
-	for _, v := range vs.members {
-		staked += v.stake
-	}
-	return staked
+	vs.mu.RLock()
+	defer vs.mu.RUnlock()
+	return vs.totalStake()
 }
 
 // ProposerForHeight returns the proposer for a height using CometBFT-style
@@ -54,21 +64,27 @@ func (vs *ValidatorSet) TotalStake() uint64 {
 // the height and the set. Equal stakes reduce to plain round-robin; ties
 // break by member index. O(height * len(members)) per call.
 func (vs *ValidatorSet) ProposerForHeight(height int64) Validator {
-	if len(vs.members) == 0 {
-		panic("no members in validator set to propose")
-	}
-	total := int64(vs.TotalStake())
-	priorities := make([]int64, len(vs.members))
-	winner := 0
+	vs.mu.RLock()
+	defer vs.mu.RUnlock()
+
+	total := int64(vs.totalStake())
+	priorities := make([]int64, len(vs.members)) // indexed by member index
+	winner := -1
 	for h := int64(1); h <= height; h++ {
 		for i := range vs.members {
-			priorities[i] += int64(vs.members[i].stake)
+			priorities[i] += int64(vs.members[i].stake) // slashed add 0
 		}
-		winner = 0
-		for i := range priorities {
-			if priorities[i] > priorities[winner] { // ties: lowest index
+		winner = -1
+		for i := range vs.members {
+			if vs.members[i].stake == 0 {
+				continue
+			}
+			if winner < 0 || priorities[i] > priorities[winner] {
 				winner = i
 			}
+		}
+		if winner < 0 {
+			panic("no validator with stake to propose")
 		}
 		priorities[winner] -= total
 	}
@@ -78,6 +94,8 @@ func (vs *ValidatorSet) ProposerForHeight(height int64) Validator {
 // StakeOf returns the stake of the member with this address, or zero if it
 // is not in the set.
 func (vs *ValidatorSet) StakeOf(addr string) uint64 {
+	vs.mu.RLock()
+	defer vs.mu.RUnlock()
 	for _, v := range vs.members {
 		if v.address == addr {
 			return v.stake
@@ -88,10 +106,26 @@ func (vs *ValidatorSet) StakeOf(addr string) uint64 {
 
 // Contains reports whether an address belongs to the set.
 func (vs *ValidatorSet) Contains(addr string) bool {
+	vs.mu.RLock()
+	defer vs.mu.RUnlock()
 	for _, v := range vs.members {
 		if v.address == addr {
 			return true
 		}
 	}
 	return false
+}
+
+// Slash cuts a validator's stake to zero, permanently. A second call for
+// the same address is a no-op. Safe for concurrent use.
+func (vs *ValidatorSet) Slash(addr string) {
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+
+	for i := range vs.members {
+		if vs.members[i].address == addr {
+			vs.members[i].stake = 0
+			return
+		}
+	}
 }

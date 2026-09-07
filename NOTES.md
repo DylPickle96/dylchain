@@ -4,9 +4,10 @@ Context for resuming work. Not user-facing (see `README.md` for that).
 
 ## Where we are
 
-Stages 1 to 6 done (BFT consensus, happy path only). 7a done: blocks mint a
-reward to their proposer. 7b done: nodes catch a validator that double-
-votes. 7c (slashing) is next.
+Stages 1 to 6 done (BFT consensus, happy path only). 7a: blocks mint a
+reward to their proposer. 7b: nodes catch a validator that double-votes.
+7c: a caught double-voter is slashed to zero stake. 7.5 (scaling pass) is
+next.
 
 Stage 6 tip:
 
@@ -39,8 +40,8 @@ the genesis allocation and grows by `BlockReward` per committed block.
 | 6 | Multiple validators (BFT), one-step vote, happy path | done |
 | 7a | Minting: block reward to the proposer | done |
 | 7b | Equivocation detection: `Evidence` from conflicting signed messages | done |
-| 7c | Slashing: verified evidence cuts the offender's stake | next |
-| 7.5 | Scaling pass: run hundreds of validators smoothly | after 7c |
+| 7c | Slashing: verified evidence cuts the offender's stake | done |
+| 7.5 | Scaling pass: run hundreds of validators smoothly | next |
 | 8 | Demo backend: long-running cluster, HTTP + SSE, fault injection | after 7.5 |
 | 9 | Explorer UI (React/Vite) | after 8 |
 
@@ -180,15 +181,28 @@ Deliberately left for later:
 - Double *proposals* are also equivocation but need `Evidence` to carry
   block signatures (a different signing payload). Not built.
 
-## Stage 7c: slashing
+## Stage 7c: slashing - done
 
-On verified evidence against validator X, cut `X.stake` (a fraction, or to
-zero). Each node applies it directly: detection is deterministic so the
-sets stay in sync without an in-block evidence record. `ValidatorSet`
-gains a `Slash(addr)`, stake is no longer immutable. `TotalStake`,
-proposer weighting, and the 2/3 threshold all shift automatically from the
-next height. Not replayable from the block list, which is the cost of the
-per-node shortcut; documented, acceptable for the demo.
+`observe`, after appending `Evidence`, calls `n.set.Slash(offender)`.
+`ValidatorSet.Slash` sets that validator's stake to zero, idempotently,
+under a write lock. `ValidatorSet` gained a `sync.RWMutex`: `Slash` takes
+the write lock, `TotalStake` / `StakeOf` / `Contains` / `ProposerForHeight`
+take the read lock. `totalStake()` is the unlocked sum, so the locked
+methods can share it without recursive read-locking (an `RWMutex`
+deadlock). `ProposerForHeight` skips zero-stake members when picking a
+winner, so a slashed validator never proposes, but the priorities slice
+stays indexed by member so the schedule shifts as little as possible.
+`Cluster.ValidatorSet()` exposes the set for reading stakes after a run.
+
+Not consensus-safe, on purpose. Nodes slash at slightly different times, so
+for a window some have the slashed set and some do not, and because
+`ProposerForHeight` recomputes from height 1 they can briefly disagree on
+the upcoming schedule. In the demo shape (a few validators, one
+misbehaving, roughly equal stake) 3 of 4 clears two thirds either way so it
+does not stall, but the real fix is evidence in a block so every node
+applies the slash at the same height. Not replayable from the block list
+for the same reason. If `TestClusterSlashesDoubleVoter` ever flakes, that
+is the escalation.
 
 ## Stage 7.5: scaling pass
 

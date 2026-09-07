@@ -169,6 +169,36 @@ func TestClusterCatchesDoubleVoter(t *testing.T) {
 	}
 }
 
+// A caught double-voter has its stake cut to zero, and the cluster keeps
+// producing and validating blocks on the remaining three.
+func TestClusterSlashesDoubleVoter(t *testing.T) {
+	alice := newWallet(t)
+	set := fourValidators(t)
+	cl := NewCluster(map[string]uint64{alice.addr: 1000}, set, 0)
+	cl.MakeFaulty(2)
+
+	const heights = 8
+	cl.Run(heights)
+
+	offender := set.members[2].address
+	if got := cl.ValidatorSet().StakeOf(offender); got != 0 {
+		t.Errorf("offender stake after run: got %d, want 0", got)
+	}
+	if got := cl.ValidatorSet().TotalStake(); got != 3 {
+		t.Errorf("total stake after slashing 1 of 4: got %d, want 3", got)
+	}
+
+	for i := 0; i < cl.Size(); i++ {
+		ch := cl.Chain(i)
+		if len(ch.Blocks) != heights+1 {
+			t.Errorf("node %d: %d blocks, want %d", i, len(ch.Blocks), heights+1)
+		}
+		if err := ch.Validate(); err != nil {
+			t.Errorf("node %d chain does not validate: %v", i, err)
+		}
+	}
+}
+
 // Every committed block names the proposer the set selected for its height
 // and carries a signature that verifies.
 func TestClusterCommittedBlocksAreSignedByProposer(t *testing.T) {
