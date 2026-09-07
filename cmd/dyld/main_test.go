@@ -160,10 +160,9 @@ func TestLimiter(t *testing.T) {
 	}
 }
 
-// A burst of writes eventually gets a 429, and faulting validators past the
-// budget gets a 409 so consensus can always still reach two thirds.
-func TestWriteLimitsAndFaultBudget(t *testing.T) {
-	s := newServer(6)
+// A burst of writes from one address eventually gets a 429.
+func TestWriteRateLimit(t *testing.T) {
+	s := newServer(4)
 	ts := httptest.NewServer(s.routes())
 	t.Cleanup(ts.Close)
 
@@ -176,11 +175,24 @@ func TestWriteLimitsAndFaultBudget(t *testing.T) {
 	if !got429 {
 		t.Error("write rate limiter never returned 429 under a burst")
 	}
+}
+
+// Faulting distinct validators past the budget gets a 409, so consensus can
+// always still reach two thirds. Few enough requests to stay under the
+// write burst.
+func TestFaultBudget(t *testing.T) {
+	s := newServer(6)
+	ts := httptest.NewServer(s.routes())
+	t.Cleanup(ts.Close)
 
 	got409 := false
 	for i := 0; i < s.cluster.Size() && !got409; i++ {
-		if postJSON(t, ts.URL+"/fault", map[string]int{"index": i}) == http.StatusConflict {
+		switch postJSON(t, ts.URL+"/fault", map[string]int{"index": i}) {
+		case http.StatusConflict:
 			got409 = true
+		case http.StatusAccepted:
+		default:
+			t.Fatalf("fault %d: unexpected status", i)
 		}
 	}
 	if !got409 {

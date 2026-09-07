@@ -93,7 +93,8 @@ type server struct {
 	cluster  *chain.Cluster
 	faucet   wallet
 	accounts map[string]wallet // name -> wallet, the demo recipients
-	writes   *ipLimiters       // per-IP rate limit for /tx and /faucet
+	writes   *ipLimiters       // per-IP rate limit for /tx, /faucet, /fault
+	reads    *ipLimiters       // looser per-IP rate limit for /state, /account
 	viewers  atomic.Int64      // live /events connections in total
 
 	origStake []uint64 // per-validator stake at genesis, for the fault budget
@@ -115,7 +116,8 @@ func newServer(n int) *server {
 	s := &server{
 		faucet:      newWallet(),
 		accounts:    map[string]wallet{},
-		writes:      newIPLimiters(5, 20, 4096), // 5/s, burst 20, per IP; 4096 IPs tracked
+		writes:      newIPLimiters(5, 20, 4096),  // 5/s, burst 20, per IP; 4096 IPs tracked
+		reads:       newIPLimiters(30, 60, 4096), // looser, for the polled read endpoints
 		nonces:      map[string]int64{},
 		seenSet:     map[string]bool{},
 		lastFaucet:  map[string]time.Time{},
@@ -297,26 +299,42 @@ func (s *server) markSeen(addrs ...string) {
 
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/state", s.handleState)
-	mux.HandleFunc("/account", s.handleAccount)
+	mux.HandleFunc("/state", s.readLimited(s.handleState))
+	mux.HandleFunc("/account", s.readLimited(s.handleAccount))
 	mux.HandleFunc("/events", s.handleEvents)
-	mux.HandleFunc("/tx", s.limited(s.handleTx))
-	mux.HandleFunc("/faucet", s.limited(s.handleFaucet))
-	mux.HandleFunc("/fault", s.handleFault)
+	mux.HandleFunc("/tx", s.writeLimited(s.handleTx))
+	mux.HandleFunc("/faucet", s.writeLimited(s.handleFaucet))
+	mux.HandleFunc("/fault", s.writeLimited(s.handleFault))
 	mux.Handle("/", staticOrStatus())
 	return withCORS(maxBody(mux))
 }
 
-// limited fronts a POST-only handler with the per-IP write rate limiter.
-// The method check comes first so a wrong-method request cannot spend a
-// token.
-func (s *server) limited(h http.HandlerFunc) http.HandlerFunc {
+// writeLimited fronts a POST-only handler with the per-IP write rate
+// limiter. The method check comes first so a wrong-method request cannot
+// spend a token.
+func (s *server) writeLimited(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
 		if !s.writes.allow(clientIP(r)) {
+			http.Error(w, "rate limited, slow down", http.StatusTooManyRequests)
+			return
+		}
+		h(w, r)
+	}
+}
+
+// readLimited fronts a GET read endpoint with the looser per-IP read
+// limiter, so a scraper cannot pin CPU polling /state.
+func (s *server) readLimited(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		if !s.reads.allow(clientIP(r)) {
 			http.Error(w, "rate limited, slow down", http.StatusTooManyRequests)
 			return
 		}
@@ -518,10 +536,6 @@ func (s *server) handleFaucet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleFault(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
 	var body struct {
 		Index int `json:"index"`
 	}
@@ -534,19 +548,25 @@ func (s *server) handleFault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.mu.Lock()
+	if s.faulty[body.Index] {
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusAccepted) // already faulty, nothing to do
+		return
+	}
+	s.mu.Unlock()
+
 	// Refuse if faulty-plus-slashed stake would reach a third of the
 	// original total, so the honest set can always still make two thirds
-	// and the demo stays recoverable.
+	// and the demo stays recoverable. The Snapshot is only reached for a
+	// genuinely new fault.
 	snap := s.cluster.Snapshot()
 	s.mu.Lock()
-	var lost uint64
+	lost := s.origStake[body.Index]
 	for i, v := range snap.Validators {
 		if v.Slashed || s.faulty[i] {
 			lost += s.origStake[i]
 		}
-	}
-	if !s.faulty[body.Index] {
-		lost += s.origStake[body.Index]
 	}
 	if 3*lost >= s.origTotal {
 		s.mu.Unlock()
