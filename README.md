@@ -42,11 +42,13 @@ web/       the explorer UI, React + Vite (not built yet)
 | `state.go` | `State`, `NewState`, `Apply` |
 | `address.go` | address derivation to and from ed25519 keys |
 | `coin.go` | native coin denom, precision, amount formatting, block reward |
-| `validator.go` | `Validator`, `ValidatorSet`, stake-weighted proposer selection, `Slash` |
+| `validator.go` | `Validator`, `ValidatorSet`, `ProposerForHeight` reference, `Slash` |
+| `proposer.go` | `election`, a node's incremental copy of the priority accumulator |
 | `mempool.go` | `Mempool`, the shared pending-transaction queue |
 | `consensus.go` | votes, the in-process bus, the per-validator round loop, equivocation detection |
 | `evidence.go` | `Evidence` for a double-vote, `verifyEvidence` |
 | `cluster.go` | `Cluster`, the entry point for a consensus run |
+| `generate.go` | `GenerateValidators`, a skewed-stake set for demos and load tests |
 | `*_test.go` | tests, with shared fixtures in `testutil_test.go` |
 
 ## Model
@@ -225,7 +227,7 @@ on `:8080`:
 | Route | |
 |-------|-|
 | `GET /state` | height, supply, recent blocks, validators, demo accounts, seen addresses |
-| `GET /events` | Server-Sent Events: one frame per block and per slash |
+| `GET /events` | Server-Sent Events: one frame per block, slash, and node halt |
 | `GET /account?address=` | balance and next nonce |
 | `POST /tx` | a signed `Transaction` as JSON |
 | `POST /faucet` | `{"address": "..."}`, funds it from the faucet |

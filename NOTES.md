@@ -278,7 +278,7 @@ Endpoints, all CORS-open:
 - `GET /state` - Snapshot (height, supply, recent blocks, validators with
   stake / voting-power share / slashed / proposed count) plus the demo
   accounts and the seen-address list.
-- `GET /events` - SSE, one `data:` frame per `block` and `slash` Event,
+- `GET /events` - SSE, one `data:` frame per `block`, `slash`, and `halt` Event,
   with a comment ping every 15s.
 - `GET /account?address=` - balance and next nonce.
 - `POST /tx` - a signed `chain.Transaction` as JSON. `Submit` checks the
@@ -324,18 +324,31 @@ git log around "audit follow-up").
 - The seen-address list is a bounded FIFO (500), evicting the oldest,
   instead of an unbounded map that `/state` re-serialised in full.
 - `seenVotes` on each node is pruned to a two-height window; without that
-  it grew ~70 KB/height forever.
+  it grew ~70 KB/height forever. A paced (server) node also prunes
+  `Chain.Blocks` to the last `blockRetention` (256), which is the other
+  half of the "runs for weeks" leak; unpaced test runs keep everything.
+- A node that hits an impossible consensus state panics a typed `nodeHalt`
+  that `run` recovers into `Cluster.recordHalt`, stopping that one
+  goroutine and surfacing on `Snapshot.Halts` and a `halt` event, rather
+  than crashing the shared process.
 - `/events` caps at 512 streams in total and 3 per IP (503 past either),
-  closes a connection after 30 min, and writes with a deadline so a client
-  that stops reading errors out instead of parking a goroutine.
+  closes a connection after 30 min, writes with a deadline so a client
+  that stops reading errors out instead of parking a goroutine, and
+  rejects non-GET.
 - `http.Server` has `ReadHeaderTimeout` and `IdleTimeout` (no
   `WriteTimeout`, it would cut the SSE stream); POST bodies are capped at
   16 KiB with `http.MaxBytesReader`.
 
-Left as gold-plating for a toy: directory-listing / dotfile exposure if
-`web/dist` is ever served by the bare `http.FileServer`, `uint64` amount
-overflow in demo math, and a consensus-disagreement `panic` that kills the
-process instead of halting one node.
+Still deferred, judged gold-plating for a toy:
+
+- **`Cluster.Evidence()` / `Cluster.Chain(i)`** read node fields without
+  synchronisation. Test-only today (no handler calls them, and tests only
+  touch them after the run joins). Fix with a lock or a snapshot if stage
+  9 adds an `/evidence` endpoint.
+- **`http.FileServer(http.Dir("web/dist"))`** renders directory listings
+  and serves dotfiles. Only matters once stage 9 builds `web/dist`; fix
+  there (404 dirs and dotfiles, or `embed.FS`).
+- **`uint64` amount overflow** in the demo's `n * chain.BlockReward` math.
 
 ## Stage 9: explorer UI
 
