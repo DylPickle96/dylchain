@@ -1,4 +1,4 @@
-package dyl
+package chain
 
 import "testing"
 

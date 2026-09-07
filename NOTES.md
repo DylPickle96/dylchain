@@ -19,10 +19,12 @@ e0eaf55  Replay state from genesis in Validate                        6b
 
 `gofmt`, `go vet`, `go test -race ./...` all clean.
 
-The package and module are named `dyl`. The native coin is `DYL`, base
-unit `udyl`, precision 6, with `FormatAmount` in `coin.go` for display.
-Supply starts at the genesis allocation and grows by `BlockReward` per
-committed block. `State.Supply()` is the running total.
+The module is `dyl`. The chain library is `package chain` under `chain/`,
+imported as `dyl/chain`. `cmd/dyld/` (stage 8) and `web/` (stage 9) get
+added with their stages. The native coin is `DYL`, base unit `udyl`,
+precision 6, with `FormatAmount` in `coin.go` for display. Supply starts at
+the genesis allocation and grows by `BlockReward` per committed block.
+`State.Supply()` is the running total.
 
 ## The staged plan
 
@@ -199,7 +201,7 @@ current bottlenecks are `O(N^2)` or worse:
   stake and voting-power share, balances, supply, recent blocks, slash
   events), `GET /events` SSE stream, `POST /tx`, `POST /fault` to make a
   named validator double-sign.
-- Lives in `cmd/` or its own package so `package dyl` stays a pure library.
+- Lives in `cmd/` or its own package so `package chain` stays a pure library.
 
 ## Stage 9: explorer UI
 
@@ -239,6 +241,6 @@ it, a validator's bar drops, a slash event lands in the feed.
 - `gofmt` + `go vet` + `go test -race ./...` before every commit.
 - Commit messages: plain, no co-author line, no em dashes or semicolons.
 - Account model, integer amounts, standard library only. This holds for
-  `package dyl` and the stage 8 backend. The stage 9 UI is a separate
+  `package chain` and the stage 8 backend. The stage 9 UI is a separate
   React/Vite project and is exempt.
-- Unit tests stay in `*_test.go` beside the code, `package dyl`.
+- Unit tests stay in `*_test.go` beside the code, `package chain`.

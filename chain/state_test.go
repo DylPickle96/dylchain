@@ -1,4 +1,4 @@
-package dyl
+package chain
 
 import (
 	"crypto/ed25519"

@@ -28,7 +28,13 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 
 ## Layout
 
-The package is one Go package split by concern:
+```
+chain/     the chain library, package chain, imported as dyl/chain
+cmd/dyld/  the demo backend (stage 8)
+web/       the explorer UI, React + Vite (stage 9)
+```
+
+`chain/` is one Go package split by concern:
 
 | File | Contents |
 |------|----------|
