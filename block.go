@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// Block is one entry in the chain. TxRoot commits to Transactions, Hash
+// covers the header (everything but Signature). Alloc is set on the genesis
+// block only; Proposer and Signature only on blocks produced by consensus.
 type Block struct {
 	Transactions []Transaction     `json:"Transactions"`
 	TxRoot       []byte            `json:"TxRoot"`
@@ -19,9 +22,9 @@ type Block struct {
 	Signature    []byte            `json:"Signature,omitempty"`
 }
 
-// Hash is the SHA-256 digest of the block's JSON serialisation. It is
-// derived on demand rather than stored, so any change to a block's
-// contents changes its hash.
+// Hash is the SHA-256 digest of the block header's JSON serialisation
+// (every field except Signature, which signs this hash). It is derived on
+// demand rather than stored, so any change to the header changes the hash.
 func (b Block) Hash() []byte {
 	block := Block{
 		TxRoot:       b.TxRoot,
@@ -40,10 +43,15 @@ func (b Block) Hash() []byte {
 	return hasher.Sum(nil)
 }
 
+// sign returns priv's ed25519 signature over the block's header hash. The
+// proposer calls this and stores the result in Signature.
 func (b Block) sign(priv ed25519.PrivateKey) []byte {
 	return ed25519.Sign(priv, b.Hash())
 }
 
+// genesisBlock builds the height-zero block from a genesis allocation. It
+// carries no proposer, so applying it mints nothing, and its Alloc is what
+// ReplayBlocks seeds state from.
 func genesisBlock(alloc map[string]uint64) Block {
 	return Block{
 		Transactions: []Transaction{},
@@ -55,6 +63,9 @@ func genesisBlock(alloc map[string]uint64) Block {
 	}
 }
 
+// verifyBlockSignature checks that Signature was produced by the key behind
+// the Proposer address, over the block's header hash. The caller is
+// responsible for deciding whether a proposer is expected at all.
 func verifyBlockSignature(b Block) error {
 	pub, err := pubKeyFromAddress(b.Proposer)
 	if err != nil {

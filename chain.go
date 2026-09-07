@@ -7,6 +7,9 @@ import (
 	"time"
 )
 
+// Chain is an ordered list of blocks starting with a genesis block, plus
+// the ledger state that results from applying them. state is unexported so
+// it can only move forward through AddBlock or CommitBlock.
 type Chain struct {
 	Blocks []Block
 	state  State
@@ -22,6 +25,9 @@ func NewChain(alloc map[string]uint64) Chain {
 	return chain
 }
 
+// newChainFromGenesis wraps an already-built genesis block in a Chain,
+// deriving the starting state by replaying it. Consensus validators pass
+// the same genesis block here so their chains link identically.
 func newChainFromGenesis(genesis Block) (Chain, error) {
 	state, err := ReplayBlocks([]Block{genesis})
 	if err != nil {
@@ -55,9 +61,11 @@ func (c *Chain) AddBlock(tx []Transaction) error {
 	return nil
 }
 
-// Validate checks, for every adjacent pair of blocks, that the stored
-// previous-hash matches a recompute of the earlier block and that the
-// height increases by exactly one.
+// Validate checks the chain's internal consistency: per block that the
+// Merkle root matches its transactions and any proposer signature verifies,
+// per adjacent pair that the previous-hash links and the height increments
+// by one, and finally that replaying every block from genesis reproduces
+// the chain's own state.
 func (c *Chain) Validate() error {
 	// Per block: the transaction body matches the root in the header.
 	for i, b := range c.Blocks {
@@ -93,6 +101,10 @@ func (c *Chain) Validate() error {
 
 }
 
+// CommitBlock appends a block that consensus has already produced and voted
+// on. Unlike AddBlock it does not build the block: it re-runs every check
+// through checkCandidate and advances state, so a node that only receives
+// committed blocks stays correct.
 func (c *Chain) CommitBlock(b Block) error {
 	next, err := c.checkCandidate(b)
 	if err != nil {
@@ -103,6 +115,10 @@ func (c *Chain) CommitBlock(b Block) error {
 	return nil
 }
 
+// checkCandidate runs every validity check for a proposed block without
+// mutating the chain, returning the state that committing it would produce.
+// A validator calls this before voting; CommitBlock calls it again before
+// appending.
 func (c *Chain) checkCandidate(b Block) (State, error) {
 	tip := c.Blocks[len(c.Blocks)-1]
 	if b.Height != tip.Height+1 {

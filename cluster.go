@@ -9,7 +9,6 @@ import (
 // single process, connected by an in-memory bus. It is the happy path only:
 // every validator is honest, online, and fast enough. No proposer timeouts,
 // no round changes, no equivocation handling.
-
 type Cluster struct {
 	set     *ValidatorSet
 	mempool *Mempool

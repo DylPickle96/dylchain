@@ -11,6 +11,7 @@ type Mempool struct {
 	txs []Transaction
 }
 
+// NewMempool returns an empty mempool.
 func NewMempool() *Mempool {
 	return &Mempool{}
 }

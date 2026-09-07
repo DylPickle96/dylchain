@@ -13,6 +13,9 @@ type State struct {
 	Nonces   map[string]int64
 }
 
+// Supply is the total amount in circulation: the sum of every balance.
+// Nothing is ever burned, so it only grows, by BlockReward per committed
+// block.
 func (s State) Supply() uint64 {
 	var supply uint64
 	for _, balance := range s.Balances {
@@ -87,6 +90,12 @@ func Apply(state State, block Block) (State, error) {
 	return next, nil
 }
 
+// ReplayBlocks rebuilds ledger state from a block list that starts with a
+// genesis block: the genesis Alloc seeds the balances and every later
+// block is applied in order. It is how a node holding only the blocks (from
+// sync, or a fresh chain in NewChain) recovers the state a live chain
+// carries. It assumes the list is already structurally valid; Validate is
+// what checks links and signatures.
 func ReplayBlocks(blocks []Block) (State, error) {
 	if len(blocks) == 0 {
 		return State{}, fmt.Errorf("block length cannot be zero")

@@ -15,6 +15,8 @@ type message interface {
 	isMessage()
 }
 
+// proposalMsg carries a proposed block; voteMsg carries one validator's
+// vote. These are the only two things that cross the bus.
 type proposalMsg struct {
 	block Block
 }
@@ -22,6 +24,7 @@ type voteMsg struct {
 	vote vote
 }
 
+// isMessage marks the two types allowed on the bus. It carries no data.
 func (proposalMsg) isMessage() {}
 func (voteMsg) isMessage()     {}
 

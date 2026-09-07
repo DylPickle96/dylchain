@@ -8,6 +8,9 @@ import (
 	"fmt"
 )
 
+// Transaction is a signed transfer of Amount base units from From to To.
+// Nonce is the sender's next expected sequence number, starting at zero.
+// Signature covers From, To, Amount, and Nonce, never itself.
 type Transaction struct {
 	From      string `json:"From"`
 	To        string `json:"To"`
@@ -78,6 +81,9 @@ func walkTree(layer [][]byte) [][]byte {
 	return walkTree(next)
 }
 
+// nextLayer hashes each adjacent pair of a layer into one node of the layer
+// above, prefixing every hash with merkleNodePrefix. An odd layer first
+// duplicates its last element so every node has a partner.
 func nextLayer(layer [][]byte) [][]byte {
 	if len(layer)%2 != 0 {
 		layer = append(layer, layer[len(layer)-1])
@@ -93,6 +99,12 @@ func nextLayer(layer [][]byte) [][]byte {
 	return next
 }
 
+// merkleProof returns the sibling hashes on the path from the transaction
+// at index up to the root: the hashes a light client needs, alongside the
+// leaf and the root, to prove that transaction is in the block. When index
+// is the last node of an odd layer, its own hash is recorded as the
+// sibling, so verifyMerkleProof needs only index parity, not the leaf
+// count.
 func merkleProof(txs []Transaction, index int) ([][]byte, error) {
 	if len(txs) == 0 {
 		return nil, fmt.Errorf("transactions length is zero")
@@ -126,6 +138,11 @@ func merkleProof(txs []Transaction, index int) ([][]byte, error) {
 	return proofs, nil
 }
 
+// verifyMerkleProof folds leafHash up through the sibling path and reports
+// whether the result equals root. At each step, index parity decides
+// whether current is the left or right input, and index is halved. An
+// empty proof means a single-transaction block, where leafHash must equal
+// root.
 func verifyMerkleProof(leafHash []byte, index int, proof [][]byte, root []byte) bool {
 	current := leafHash
 	for _, sibling := range proof {
