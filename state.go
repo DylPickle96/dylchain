@@ -13,6 +13,14 @@ type State struct {
 	Nonces   map[string]int64
 }
 
+func (s State) Supply() uint64 {
+	var supply uint64
+	for _, balance := range s.Balances {
+		supply += balance
+	}
+	return supply
+}
+
 // NewState builds a starting ledger from a genesis allocation of address
 // to initial balance. All nonces start at zero.
 func NewState(alloc map[string]uint64) State {
@@ -72,6 +80,9 @@ func Apply(state State, block Block) (State, error) {
 		next.Balances[tx.From] -= tx.Amount
 		next.Balances[tx.To] += tx.Amount
 		next.Nonces[tx.From]++
+	}
+	if block.Proposer != "" {
+		next.Balances[block.Proposer] += BlockReward
 	}
 	return next, nil
 }

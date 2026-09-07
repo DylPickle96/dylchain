@@ -21,6 +21,11 @@ const (
 	// baseUnitsPerCoin is 10^Precision. Kept as a literal and checked
 	// against Precision in the tests.
 	baseUnitsPerCoin = 1_000_000
+
+	// BlockReward is the amount minted to a block's proposer when the block
+	// is applied, in BaseDenom. One DYL per block. Genesis and AddBlock
+	// blocks carry no proposer and mint nothing.
+	BlockReward = 1 * baseUnitsPerCoin
 )
 
 // FormatAmount renders a base-unit amount as a DisplayDenom string, e.g.

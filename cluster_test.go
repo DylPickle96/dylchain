@@ -89,6 +89,38 @@ func TestClusterSpreadsTransactionsAcrossBlocks(t *testing.T) {
 	}
 }
 
+// Every committed block mints BlockReward to its proposer, so total supply
+// grows by one reward per height and each proposer's balance is exactly the
+// rewards it earned.
+func TestClusterSupplyGrowsWithMinting(t *testing.T) {
+	alice := newWallet(t)
+	set := fourValidators(t)
+	cl := NewCluster(map[string]uint64{alice.addr: 1000}, set, 0)
+
+	const heights = 6
+	cl.Run(heights)
+
+	ch := cl.Chain(0)
+	if err := ch.Validate(); err != nil {
+		t.Fatalf("chain does not validate: %v", err)
+	}
+
+	wantSupply := uint64(1000 + heights*BlockReward)
+	if got := ch.state.Supply(); got != wantSupply {
+		t.Errorf("supply after %d heights: got %d, want %d", heights, got, wantSupply)
+	}
+
+	wantRewards := map[string]uint64{}
+	for h := int64(1); h <= heights; h++ {
+		wantRewards[set.ProposerForHeight(h).address] += BlockReward
+	}
+	for addr, want := range wantRewards {
+		if got := ch.state.Balances[addr]; got != want {
+			t.Errorf("proposer %s: balance %d, want %d in rewards", addr, got, want)
+		}
+	}
+}
+
 // Every committed block names the proposer the set selected for its height
 // and carries a signature that verifies.
 func TestClusterCommittedBlocksAreSignedByProposer(t *testing.T) {

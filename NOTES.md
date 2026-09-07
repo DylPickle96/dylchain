@@ -4,8 +4,10 @@ Context for resuming work. Not user-facing (see `README.md` for that).
 
 ## Where we are
 
-Stages 1 to 6 are done. Stage 6 (one-step-vote BFT consensus) is the happy
-path only. Stage 6 tip:
+Stages 1 to 6 done (BFT consensus, happy path only). Stage 7a done: blocks
+mint a reward to their proposer. 7b (equivocation detection) is next.
+
+Stage 6 tip:
 
 ```
 5c126db  Run one-step-vote BFT consensus across a validator cluster   6e
@@ -19,8 +21,8 @@ e0eaf55  Replay state from genesis in Validate                        6b
 
 The package and module are named `dyl`. The native coin is `DYL`, base
 unit `udyl`, precision 6, with `FormatAmount` in `coin.go` for display.
-Minting the coin is stage 7; supply is fixed at the genesis allocation
-until then.
+Supply starts at the genesis allocation and grows by `BlockReward` per
+committed block. `State.Supply()` is the running total.
 
 ## The staged plan
 
@@ -32,8 +34,8 @@ until then.
 | 4 | ed25519 signatures | done |
 | 5 | Merkle root and inclusion proofs | done |
 | 6 | Multiple validators (BFT), one-step vote, happy path | done |
-| 7a | Minting: block reward to the proposer | next |
-| 7b | Equivocation detection: `Evidence` from conflicting signed messages | after 7a |
+| 7a | Minting: block reward to the proposer | done |
+| 7b | Equivocation detection: `Evidence` from conflicting signed messages | next |
 | 7c | Slashing: verified evidence cuts the offender's stake | after 7b |
 | 7.5 | Scaling pass: run hundreds of validators smoothly | after 7c |
 | 8 | Demo backend: long-running cluster, HTTP + SSE, fault injection | after 7.5 |
@@ -132,17 +134,19 @@ built. In a single process with no real network there is nothing to
 recover from, and one-step voting stays as is. The one piece worth having,
 double-sign detection, moved into 7b because slashing needs it.
 
-## Stage 7a: minting
+## Stage 7a: minting - done
 
-Block reward credited to `block.Proposer` in `Apply`, after the
-transaction loop, guarded on `Proposer != ""` so genesis and `AddBlock`
-blocks mint nothing. Deterministic from the header, so `ReplayBlocks` and
-`Validate`'s replay check reproduce it. `BlockReward` constant in
-`coin.go`. Add `State.Supply()` (sum of balances, no burning) for the UI.
+`BlockReward` (`coin.go`, one DYL) is credited to `block.Proposer` in
+`Apply`, after the transaction loop, guarded on `Proposer != ""` so genesis
+and `AddBlock` blocks mint nothing. Deterministic from the header, so
+`ReplayBlocks` and `Validate`'s replay-plus-`maps.Equal` check reproduce
+it, and the existing cluster tests (which assert only non-validator
+balances) still pass. `State.Supply()` sums balances, no burning: it starts
+at the genesis allocation and grows by `BlockReward` per committed block.
 
 The proposal 46 question becomes concrete here: `BlockReward` per block vs
 the size of a PSE release. If minting outruns the release the pause is
-cosmetic. For the toy, pick a round `BlockReward` and note the tension.
+cosmetic. The toy just picks a round number and notes the tension.
 
 ## Stage 7b: equivocation detection
 

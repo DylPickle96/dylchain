@@ -191,6 +191,59 @@ func TestApplySignatureRejections(t *testing.T) {
 	})
 }
 
+// Supply is the sum of all balances, no burning.
+func TestStateSupply(t *testing.T) {
+	s := NewState(map[string]uint64{"a": 100, "b": 250, "c": 0})
+	if got := s.Supply(); got != 350 {
+		t.Errorf("supply: got %d, want 350", got)
+	}
+}
+
+// A block with a proposer mints BlockReward to that proposer, on top of its
+// transaction effects, growing total supply.
+func TestApplyMintsBlockReward(t *testing.T) {
+	alice := newWallet(t)
+	bob := newWallet(t)
+	proposer := newWallet(t)
+	s := NewState(map[string]uint64{alice.addr: 1000})
+
+	next, err := Apply(s, Block{
+		Transactions: []Transaction{alice.send(t, bob.addr, 100, 0)},
+		Proposer:     proposer.addr,
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if got := next.Balances[alice.addr]; got != 900 {
+		t.Errorf("alice: got %d, want 900", got)
+	}
+	if got := next.Balances[bob.addr]; got != 100 {
+		t.Errorf("bob: got %d, want 100", got)
+	}
+	if got := next.Balances[proposer.addr]; got != BlockReward {
+		t.Errorf("proposer reward: got %d, want %d", got, BlockReward)
+	}
+	if got := next.Supply(); got != 1000+BlockReward {
+		t.Errorf("supply: got %d, want %d", got, 1000+BlockReward)
+	}
+}
+
+// A block with no proposer (the AddBlock path) mints nothing.
+func TestApplyNoMintWithoutProposer(t *testing.T) {
+	alice := newWallet(t)
+	bob := newWallet(t)
+	s := NewState(map[string]uint64{alice.addr: 1000})
+
+	next, err := Apply(s, block(alice.send(t, bob.addr, 100, 0)))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got := next.Supply(); got != 1000 {
+		t.Errorf("supply changed without a proposer: got %d, want 1000", got)
+	}
+}
+
 // Nonce enforcement across successive blocks: 0 then 1 works, replaying 0 fails.
 func TestApplyNonceSequenceAcrossBlocks(t *testing.T) {
 	alice := newWallet(t)

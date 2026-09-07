@@ -19,7 +19,7 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 | 4 | ed25519 transaction signatures | done |
 | 5 | Merkle root and inclusion proofs | done |
 | 6 | Multiple validators (BFT consensus) | done, happy path |
-| 7a | Minting: block reward to the proposer | not started |
+| 7a | Minting: block reward to the proposer | done |
 | 7b | Equivocation detection | not started |
 | 7c | Slashing | not started |
 | 7.5 | Scaling pass (hundreds of validators) | not started |
@@ -37,7 +37,7 @@ The package is one Go package split by concern:
 | `transaction.go` | `Transaction`, `Sign`, Merkle root and proofs |
 | `state.go` | `State`, `NewState`, `Apply` |
 | `address.go` | address derivation to and from ed25519 keys |
-| `coin.go` | native coin denom, precision, amount formatting |
+| `coin.go` | native coin denom, precision, amount formatting, block reward |
 | `validator.go` | `Validator`, `ValidatorSet`, stake-weighted proposer selection |
 | `mempool.go` | `Mempool`, the shared pending-transaction queue |
 | `consensus.go` | votes, the in-process bus, the per-validator round loop |
@@ -136,6 +136,11 @@ cross between nodes.
 4. Tally incoming votes by stake. Once votes covering **more than two
    thirds of total stake** are in (`3*accepted > 2*total`), commit. That
    commit is final: no fork choice, no reversion.
+
+Applying a committed block mints `BlockReward` to its proposer, so total
+supply grows by one reward per height. It happens inside `Apply`, keyed off
+the block's `Proposer`, so `ReplayBlocks` and `Validate` reproduce it.
+`State.Supply()` is the running total (sum of balances, nothing is burned).
 
 Votes and proposals that arrive out of order (a vote before its proposal, a
 message for a later height) are stashed per node and rescanned, so timing
