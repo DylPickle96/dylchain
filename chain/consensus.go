@@ -101,6 +101,9 @@ type node struct {
 	bus         *bus
 	maxBlockTxs int
 	pending     []message
+	seenVotes   map[int64]map[string]vote
+	evidence    []Evidence
+	byzantine   bool
 }
 
 // run drives the node through heights 1..heights, one block per height.
@@ -134,6 +137,9 @@ func (n *node) runHeight(h int64) {
 	// 3. Broadcast our vote for it.
 	blockHash := candidate.Hash()
 	n.bus.broadcast(voteMsg{vote: newVote(h, blockHash, n.self)})
+	if n.byzantine {
+		n.bus.broadcast(voteMsg{vote: newVote(h, []byte("equivocation"), n.self)})
+	}
 
 	// 4. Tally votes by stake until strictly more than two thirds accepts.
 	counted := make(map[string]bool)
@@ -197,6 +203,7 @@ func (n *node) waitFor(match func(message) bool) message {
 	//    stashing everything that doesn't
 	for {
 		m := <-n.inbox
+		n.observe(m)
 		if match(m) {
 			return m
 		}
@@ -214,6 +221,29 @@ func (n *node) prunePending(h int64) {
 		}
 	}
 	n.pending = kept
+}
+
+func (n *node) observe(m message) {
+	vm, ok := m.(voteMsg)
+	if !ok {
+		return
+	}
+	v := vm.vote
+	byHeight := n.seenVotes[v.height]
+	if byHeight == nil {
+		byHeight = map[string]vote{}
+		n.seenVotes[v.height] = byHeight
+	}
+	prev, seen := byHeight[v.voter]
+	if !seen {
+		byHeight[v.voter] = v
+		return
+	}
+	if !bytes.Equal(prev.blockHash, v.blockHash) {
+		n.evidence = append(n.evidence, Evidence{
+			Offender: v.voter, Height: v.height, VoteA: prev, VoteB: v,
+		})
+	}
 }
 
 // msgHeight is the height a message concerns, for prunePending.

@@ -20,7 +20,7 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 | 5 | Merkle root and inclusion proofs | done |
 | 6 | Multiple validators (BFT consensus) | done, happy path |
 | 7a | Minting: block reward to the proposer | done |
-| 7b | Equivocation detection | not started |
+| 7b | Equivocation detection | done |
 | 7c | Slashing | not started |
 | 7.5 | Scaling pass (hundreds of validators) | not started |
 | 8 | Demo backend (HTTP + SSE, fault injection) | not started |

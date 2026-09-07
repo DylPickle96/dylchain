@@ -6,9 +6,10 @@ import (
 )
 
 // Cluster runs a set of validators through one-step-vote BFT consensus in a
-// single process, connected by an in-memory bus. It is the happy path only:
-// every validator is honest, online, and fast enough. No proposer timeouts,
-// no round changes, no equivocation handling.
+// single process, connected by an in-memory bus. Validators are honest,
+// online, and fast unless MakeFaulty marks one. No proposer timeouts, no
+// round changes. Equivocation is detected (see Evidence) but not yet acted
+// on.
 type Cluster struct {
 	set     *ValidatorSet
 	mempool *Mempool
@@ -43,6 +44,7 @@ func NewCluster(alloc map[string]uint64, set *ValidatorSet, maxBlockTxs int) *Cl
 			inbox:       b.inboxes[i],
 			bus:         b,
 			maxBlockTxs: maxBlockTxs,
+			seenVotes:   make(map[int64]map[string]vote),
 		})
 	}
 	return c
@@ -77,4 +79,29 @@ func (c *Cluster) Size() int {
 // Chain returns the chain held by validator i, for inspection after a run.
 func (c *Cluster) Chain(i int) *Chain {
 	return c.nodes[i].chain
+}
+
+// MakeFaulty makes validator i double-vote every height. Stage 8 wires the
+// UI fault button to this.
+func (c *Cluster) MakeFaulty(i int) {
+	c.nodes[i].byzantine = true
+}
+
+// Evidence returns the equivocation evidence the cluster has gathered, one
+// entry per (offender, height), each re-verified. Call it after Run: it
+// reads node state without locking.
+func (c *Cluster) Evidence() []Evidence {
+	seen := make(map[string]bool)
+	var out []Evidence
+	for _, n := range c.nodes {
+		for _, e := range n.evidence {
+			key := fmt.Sprintf("%s@%d", e.Offender, e.Height)
+			if seen[key] || !verifyEvidence(e) {
+				continue
+			}
+			seen[key] = true
+			out = append(out, e)
+		}
+	}
+	return out
 }

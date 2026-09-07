@@ -121,6 +121,54 @@ func TestClusterSupplyGrowsWithMinting(t *testing.T) {
 	}
 }
 
+// A validator made to double-vote is caught by every node, including its
+// own, and the cluster still commits every block on the honest majority.
+func TestClusterCatchesDoubleVoter(t *testing.T) {
+	alice := newWallet(t)
+	set := fourValidators(t)
+	cl := NewCluster(map[string]uint64{alice.addr: 1000}, set, 0)
+	cl.MakeFaulty(2)
+	cl.Submit(alice.send(t, newWallet(t).addr, 10, 0))
+
+	const heights = 8
+	cl.Run(heights)
+
+	offender := set.members[2].address
+
+	// Every equivocation is caught except possibly the last height's, since
+	// nothing drains a node's inbox once its run loop ends.
+	ev := cl.Evidence()
+	if len(ev) < heights-1 {
+		t.Errorf("caught %d equivocations, want at least %d of %d", len(ev), heights-1, heights)
+	}
+	for _, e := range ev {
+		if e.Offender != offender {
+			t.Errorf("evidence at height %d names %s, want %s", e.Height, e.Offender, offender)
+		}
+		if !verifyEvidence(e) {
+			t.Errorf("evidence at height %d does not verify", e.Height)
+		}
+	}
+
+	// Every node caught the cheat, the offender's own node included.
+	for i := 0; i < cl.Size(); i++ {
+		if len(cl.nodes[i].evidence) == 0 {
+			t.Errorf("node %d produced no evidence", i)
+		}
+	}
+
+	// Consensus still completed on every chain.
+	for i := 0; i < cl.Size(); i++ {
+		ch := cl.Chain(i)
+		if len(ch.Blocks) != heights+1 {
+			t.Errorf("node %d: %d blocks, want %d", i, len(ch.Blocks), heights+1)
+		}
+		if err := ch.Validate(); err != nil {
+			t.Errorf("node %d chain does not validate: %v", i, err)
+		}
+	}
+}
+
 // Every committed block names the proposer the set selected for its height
 // and carries a signature that verifies.
 func TestClusterCommittedBlocksAreSignedByProposer(t *testing.T) {

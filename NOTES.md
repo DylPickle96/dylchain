@@ -4,8 +4,9 @@ Context for resuming work. Not user-facing (see `README.md` for that).
 
 ## Where we are
 
-Stages 1 to 6 done (BFT consensus, happy path only). Stage 7a done: blocks
-mint a reward to their proposer. 7b (equivocation detection) is next.
+Stages 1 to 6 done (BFT consensus, happy path only). 7a done: blocks mint a
+reward to their proposer. 7b done: nodes catch a validator that double-
+votes. 7c (slashing) is next.
 
 Stage 6 tip:
 
@@ -37,8 +38,8 @@ the genesis allocation and grows by `BlockReward` per committed block.
 | 5 | Merkle root and inclusion proofs | done |
 | 6 | Multiple validators (BFT), one-step vote, happy path | done |
 | 7a | Minting: block reward to the proposer | done |
-| 7b | Equivocation detection: `Evidence` from conflicting signed messages | next |
-| 7c | Slashing: verified evidence cuts the offender's stake | after 7b |
+| 7b | Equivocation detection: `Evidence` from conflicting signed messages | done |
+| 7c | Slashing: verified evidence cuts the offender's stake | next |
 | 7.5 | Scaling pass: run hundreds of validators smoothly | after 7c |
 | 8 | Demo backend: long-running cluster, HTTP + SSE, fault injection | after 7.5 |
 | 9 | Explorer UI (React/Vite) | after 8 |
@@ -150,15 +151,34 @@ The proposal 46 question becomes concrete here: `BlockReward` per block vs
 the size of a PSE release. If minting outruns the release the pause is
 cosmetic. The toy just picks a round number and notes the tension.
 
-## Stage 7b: equivocation detection
+## Stage 7b: equivocation detection - done
 
-Each node keeps a first-seen record per (height, signer). A second signed
-message from that signer for the same height over different content is
-`Evidence{a, b}`. `verifyEvidence`: both signatures valid, same signer,
-conflicting content, same height. The node surfaces evidence on a channel
-or a slice. Detection is deterministic, so every honest node produces the
-same evidence independently. Scoped to height, not (height, round), since
-there are no rounds.
+Scoped to double votes: two votes from one validator at one height for
+different block hashes. `Evidence{Offender, Height, VoteA, VoteB}` in
+`evidence.go`; `verifyEvidence` requires both votes validly signed by
+Offender, at Height, for different hashes.
+
+`node.observe(m)` runs on every message `waitFor` pulls off the inbox. It
+keeps `seenVotes map[int64]map[string]vote` (height then voter) and appends
+to `node.evidence` when a second, conflicting vote turns up.
+`Cluster.MakeFaulty(i)` sets `node.byzantine`, which makes `runHeight`
+broadcast a second vote for a junk hash every height; that vote never
+matches anyone's tally predicate, so consensus still commits on the honest
+majority. `Cluster.Evidence()` gathers every node's evidence, dedupes by
+`offender@height`, re-verifies each.
+
+Deliberately left for later:
+
+- **Detection can miss the final height of a fixed `Run(N)`.** Nothing
+  drains a node's inbox after its run loop ends, so the offender's
+  last-height votes may go unobserved. Earlier heights are swept up by the
+  next round's `waitFor`. A live cluster always has a next round.
+- **`node.evidence` is read without a lock**, only safe after `Run`
+  returns. Stage 8's live server needs a channel or a mutex.
+- **`seenVotes` grows unbounded**, one entry per (height, voter) forever.
+  Needs a height-window prune for a long run (7.5 or 8).
+- Double *proposals* are also equivocation but need `Evidence` to carry
+  block signatures (a different signing payload). Not built.
 
 ## Stage 7c: slashing
 
