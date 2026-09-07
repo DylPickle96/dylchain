@@ -16,6 +16,12 @@ func deriveAddress(publicKey ed25519.PublicKey) string {
 	return addressPrefix + hex.EncodeToString(publicKey)
 }
 
+// AddressFromKey is the exported form of deriveAddress, for callers outside
+// the package that hold a key pair (a faucet, a wallet).
+func AddressFromKey(publicKey ed25519.PublicKey) string {
+	return deriveAddress(publicKey)
+}
+
 // pubKeyFromAddress reverses deriveAddress, rejecting a missing prefix,
 // invalid hex, or the wrong key length.
 func pubKeyFromAddress(address string) (ed25519.PublicKey, error) {

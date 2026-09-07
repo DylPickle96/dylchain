@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // recentBlocks is how many committed blocks a Cluster keeps for its
@@ -35,37 +36,37 @@ type Cluster struct {
 
 // BlockInfo is the summary of one committed block, for the Snapshot feed.
 type BlockInfo struct {
-	Height   int64
-	Proposer string
-	Txs      int
-	Time     int64
+	Height   int64  `json:"height"`
+	Proposer string `json:"proposer"`
+	Txs      int    `json:"txs"`
+	Time     int64  `json:"time"`
 }
 
 // Event is a thing worth telling a watcher about: a committed block or a
 // slashed validator.
 type Event struct {
-	Kind      string // "block" or "slash"
-	Height    int64
-	Validator string // proposer for "block", offender for "slash"
+	Kind      string `json:"kind"` // "block" or "slash"
+	Height    int64  `json:"height"`
+	Validator string `json:"validator"` // proposer for "block", offender for "slash"
 }
 
 // ValidatorInfo is one validator's state in a Snapshot.
 type ValidatorInfo struct {
-	Moniker     string
-	Address     string
-	Stake       uint64
-	VotingPower float64 // fraction of current total stake
-	Slashed     bool
-	Proposed    int
+	Moniker     string  `json:"moniker"`
+	Address     string  `json:"address"`
+	Stake       uint64  `json:"stake"`
+	VotingPower float64 `json:"votingPower"` // fraction of current total stake
+	Slashed     bool    `json:"slashed"`
+	Proposed    int     `json:"proposed"`
 }
 
 // Snapshot is a consistent, lock-guarded view of the cluster for an API
 // response.
 type Snapshot struct {
-	Height     int64
-	Supply     uint64
-	Blocks     []BlockInfo // recent, oldest first
-	Validators []ValidatorInfo
+	Height     int64           `json:"height"`
+	Supply     uint64          `json:"supply"`
+	Blocks     []BlockInfo     `json:"blocks"` // recent, oldest first
+	Validators []ValidatorInfo `json:"validators"`
 }
 
 // NewCluster wires up a cluster: one genesis block built from alloc and
@@ -149,6 +150,15 @@ func (c *Cluster) RunContext(ctx context.Context) {
 		n.ctx = ctx
 	}
 	c.drive(ctx, 0)
+}
+
+// PaceBlocks makes every node pause d between committing one block and
+// starting the next, so a demo runs at a watchable rate. Zero (the
+// default) runs as fast as consensus allows. Call it before RunContext.
+func (c *Cluster) PaceBlocks(d time.Duration) {
+	for _, n := range c.nodes {
+		n.minInterval = d
+	}
 }
 
 func (c *Cluster) drive(ctx context.Context, maxHeight int64) {
@@ -292,7 +302,7 @@ func (c *Cluster) Chain(i int) *Chain {
 // MakeFaulty makes validator i double-vote every height, so the cluster can
 // be seen catching and slashing it.
 func (c *Cluster) MakeFaulty(i int) {
-	c.nodes[i].byzantine = true
+	c.nodes[i].byzantine.Store(true)
 }
 
 // Evidence returns the equivocation evidence the cluster has gathered, one

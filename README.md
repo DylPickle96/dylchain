@@ -24,14 +24,14 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 | 7c | Slashing | done |
 | 7.5 | Scaling pass (hundreds of validators) | done |
 | 8a | Live-cluster primitives | done |
-| 8b | Demo backend (HTTP + SSE server) | not started |
+| 8b | Demo backend (HTTP + SSE server) | done |
 | 9 | Explorer UI | not started |
 
 ## Layout
 
 ```
 chain/     the chain library, package chain, imported as dyl/chain
-cmd/dyld/  the demo backend (stage 8)
+cmd/dyld/  the demo server: runs a live cluster, serves HTTP + SSE
 web/       the explorer UI, React + Vite (stage 9)
 ```
 
@@ -213,6 +213,28 @@ recording evidence in a block so every node slashes at the same height.
   them.
 - Slashing is applied per node, off-chain, so nodes can disagree on the
   validator set for a short window after a double-sign. See Faults.
+
+## Running the demo
+
+```
+go run ./cmd/dyld
+```
+
+Boots a 20-validator cluster, produces a block a second, and serves an API
+on `:8080`:
+
+| Route | |
+|-------|-|
+| `GET /state` | height, supply, recent blocks, validators, demo accounts, seen addresses |
+| `GET /events` | Server-Sent Events: one frame per block and per slash |
+| `GET /account?address=` | balance and next nonce |
+| `POST /tx` | a signed `Transaction` as JSON |
+| `POST /faucet` | `{"address": "..."}`, funds it from the faucet |
+| `POST /fault` | `{"index": N}`, makes validator N double-vote |
+
+Flags: `-validators`, `-addr`, `-block-time`, `-tx-every`. It serves the
+built UI from `web/dist` when that exists (stage 9), otherwise just the
+API.
 
 ## Running the tests
 

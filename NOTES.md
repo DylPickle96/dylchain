@@ -8,7 +8,7 @@ Stages 1 to 6 done (BFT consensus, happy path only). 7a: blocks mint a
 reward to their proposer. 7b: nodes catch a validator that double-votes.
 7c: a caught double-voter is slashed to zero stake. 7.5: measured, the
 cluster already scales to ~200 validators, only the inbox buffer needed a
-fix. Stage 8a done (live-cluster primitives: RunContext, Snapshot, events). 8b (the HTTP server) is next.
+fix. Stage 8a done (live-cluster primitives: RunContext, Snapshot, events). 8b done: cmd/dyld serves the live cluster over HTTP + SSE. Stage 9 (the UI) is next.
 
 Stage 6 tip:
 
@@ -44,8 +44,8 @@ the genesis allocation and grows by `BlockReward` per committed block.
 | 7c | Slashing: verified evidence cuts the offender's stake | done |
 | 7.5 | Scaling pass: run hundreds of validators smoothly | done |
 | 8a | Live-cluster primitives (RunContext, Snapshot, events) | done |
-| 8b | Demo backend: HTTP + SSE server, tx driver | next |
-| 9 | Explorer UI (React/Vite) | after 8b |
+| 8b | Demo backend: HTTP + SSE server, tx driver | done |
+| 9 | Explorer UI (React/Vite) | next |
 
 The goal is a portfolio proof of concept: the cluster running live behind
 an explorer-style UI, with a button that makes a validator double-sign so
@@ -268,16 +268,37 @@ be worth changing. Deferred, with the trigger for revisiting:
   nonce. `Subscribe()` / `Unsubscribe()` hand out buffered `Event`
   channels; a full channel drops the event rather than stalling consensus.
 
-## Stage 8b: the server - next
+## Stage 8b: the server - done
 
-- `cmd/dyld/`: boot N validators via `GenerateValidators`, genesis-fund a
-  faucet wallet and a few named demo accounts (treasury, alice, bob,
-  carol), run `RunContext` and a transaction-driver goroutine.
-- `net/http` (stdlib): `GET /state` (Snapshot plus demo accounts and seen
-  addresses), `GET /events` (SSE over Subscribe), `GET /account`,
-  `POST /tx` (signed Transaction JSON), `POST /faucet`, `POST /fault`.
-- Track "seen addresses" in the server from `/tx` and `/faucet` traffic.
-- Serve `web/dist` so the whole demo is one binary.
+`cmd/dyld/main.go`, stdlib only. Boots N validators from
+`GenerateValidators`, genesis-funds a faucet wallet (effectively
+unlimited) and four named demo accounts (treasury, alice, bob, carol),
+runs `RunContext` and a driver goroutine that sends a small random
+transfer between demo accounts every `-tx-every`. `PaceBlocks(-block-time)`
+keeps the rate watchable; default one block a second.
+
+Endpoints, all CORS-open:
+
+- `GET /state` - Snapshot (height, supply, recent blocks, validators with
+  stake / voting-power share / slashed / proposed count) plus the demo
+  accounts and the seen-address list.
+- `GET /events` - SSE, one `data:` frame per `block` and `slash` Event,
+  with a comment ping every 15s.
+- `GET /account?address=` - balance and next nonce.
+- `POST /tx` - a signed `chain.Transaction` as JSON. `Submit` checks the
+  signature; a bad one is a 400.
+- `POST /faucet {address}` - server signs a transfer from the faucet,
+  rate-limited to once per 30s per address.
+- `POST /fault {index}` - `MakeFaulty` on that validator.
+
+The server holds the faucet and demo-account keys and tracks a per-wallet
+next-nonce so back-to-back sends do not collide. "Seen addresses" fill in
+from `/tx` and `/faucet` traffic. `/` serves `web/dist` if built, else a
+one-line status. `cmd/dyld/main_test.go` drives every endpoint against a
+live cluster.
+
+Config: `-validators` (20), `-addr` (:8080), `-block-time` (1s),
+`-tx-every` (2s).
 
 ## Stage 9: explorer UI
 

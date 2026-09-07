@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 )
 
@@ -114,11 +115,12 @@ type node struct {
 	bus         *bus
 	cluster     *Cluster
 	ctx         context.Context
+	minInterval time.Duration
 	maxBlockTxs int
 	pending     []message
 	seenVotes   map[int64]map[string]vote
 	evidence    []Evidence
-	byzantine   bool
+	byzantine   atomic.Bool // set by MakeFaulty, possibly mid-run
 }
 
 // run drives the node one block per height. It stops after maxHeight, or
@@ -135,6 +137,13 @@ func (n *node) run(maxHeight int64) {
 		}
 		n.runHeight(h)
 		n.prunePending(h)
+		if n.minInterval > 0 {
+			select {
+			case <-time.After(n.minInterval):
+			case <-n.ctx.Done():
+				return
+			}
+		}
 	}
 }
 
@@ -161,7 +170,7 @@ func (n *node) runHeight(h int64) {
 	// 3. Broadcast our vote for it.
 	blockHash := candidate.Hash()
 	n.bus.broadcast(voteMsg{vote: newVote(h, blockHash, n.self)})
-	if n.byzantine {
+	if n.byzantine.Load() {
 		n.bus.broadcast(voteMsg{vote: newVote(h, []byte("equivocation"), n.self)})
 	}
 
