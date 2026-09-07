@@ -223,6 +223,10 @@ func (n *node) prunePending(h int64) {
 	n.pending = kept
 }
 
+// observe runs on every message a node pulls off the inbox. It keeps the
+// first vote it saw from each (height, voter); a second, conflicting vote
+// is equivocation, which it verifies, records as Evidence, and slashes the
+// offender for.
 func (n *node) observe(m message) {
 	vm, ok := m.(voteMsg)
 	if !ok {

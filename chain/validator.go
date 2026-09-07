@@ -42,7 +42,9 @@ func NewValidatorSet(members ...Validator) *ValidatorSet {
 	return &ValidatorSet{members: members}
 }
 
-func (vs *ValidatorSet) totalStake() uint64 { // caller holds the lock
+// totalStake sums the members' stakes. The caller must already hold the
+// lock; TotalStake is the exported, locked wrapper.
+func (vs *ValidatorSet) totalStake() uint64 {
 	var t uint64
 	for _, v := range vs.members {
 		t += v.stake
