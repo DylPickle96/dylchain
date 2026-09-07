@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -53,7 +54,7 @@ func TestServerEndpoints(t *testing.T) {
 	}
 
 	// POST /tx: a well-signed transfer is accepted.
-	good := s.sign(s.accounts["alice"], s.accounts["bob"].addr, chain.BlockReward)
+	good, _ := s.signFrom(s.accounts["alice"], s.accounts["bob"].addr, chain.BlockReward)
 	if code := postJSON(t, ts.URL+"/tx", good); code != http.StatusAccepted {
 		t.Errorf("POST /tx (good): got %d, want 202", code)
 	}
@@ -90,6 +91,55 @@ func TestServerEndpoints(t *testing.T) {
 		getJSON(t, ts.URL+"/state", &st)
 		return len(st.Validators) > 3 && st.Validators[3].Slashed
 	}, "validator 3 never slashed")
+}
+
+// markSeen keeps a bounded FIFO: full means the oldest address is evicted.
+func TestMarkSeenBounded(t *testing.T) {
+	s := newServer(4)
+	for i := 0; i < maxSeen+50; i++ {
+		s.markSeen(fmt.Sprintf("addr-%d", i))
+	}
+	if len(s.seenList) != maxSeen || len(s.seenSet) != maxSeen {
+		t.Fatalf("seen sizes: list %d set %d, want %d each", len(s.seenList), len(s.seenSet), maxSeen)
+	}
+	if s.seenSet["addr-0"] {
+		t.Error("oldest address was not evicted")
+	}
+	if !s.seenSet[fmt.Sprintf("addr-%d", maxSeen+49)] {
+		t.Error("newest address is missing")
+	}
+	// A duplicate does not grow the list.
+	s.markSeen(fmt.Sprintf("addr-%d", maxSeen+49))
+	if len(s.seenList) != maxSeen {
+		t.Errorf("duplicate grew the list to %d", len(s.seenList))
+	}
+}
+
+// Per-IP buckets are independent, and evicting an IP from the bounded map
+// resets its bucket.
+func TestIPLimiters(t *testing.T) {
+	l := newIPLimiters(1000, 2, 2) // burst 2, track 2 IPs
+
+	grants := func(ip string, n int) int {
+		got := 0
+		for i := 0; i < n; i++ {
+			if l.allow(ip) {
+				got++
+			}
+		}
+		return got
+	}
+
+	if got := grants("a", 3); got != 2 {
+		t.Errorf("IP a: %d of 3 granted, want 2 (its burst)", got)
+	}
+	if got := grants("b", 2); got != 2 {
+		t.Errorf("IP b: %d of 2 granted, want 2 (its own burst)", got)
+	}
+	l.allow("c") // evicts a, the oldest
+	if got := grants("a", 1); got != 1 {
+		t.Error("evicted IP a did not get a fresh bucket")
+	}
 }
 
 // The token bucket allows a burst, then denies, then recovers as tokens
@@ -136,6 +186,38 @@ func TestWriteLimitsAndFaultBudget(t *testing.T) {
 	if !got409 {
 		t.Error("fault budget never refused")
 	}
+}
+
+// The faucet rejects its own address and malformed addresses before
+// touching its nonce, so a bad request cannot wedge it: a good request
+// right after still funds.
+func TestFaucetRejectsBadAddressWithoutWedging(t *testing.T) {
+	s := newServer(4)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go s.cluster.RunContext(ctx)
+
+	ts := httptest.NewServer(s.routes())
+	t.Cleanup(ts.Close)
+
+	if code := postJSON(t, ts.URL+"/faucet", map[string]string{"address": s.faucet.addr}); code != http.StatusBadRequest {
+		t.Errorf("faucet self-send: got %d, want 400", code)
+	}
+	if code := postJSON(t, ts.URL+"/faucet", map[string]string{"address": "not-an-address"}); code != http.StatusBadRequest {
+		t.Errorf("faucet junk address: got %d, want 400", code)
+	}
+
+	good := newWallet().addr
+	if code := postJSON(t, ts.URL+"/faucet", map[string]string{"address": good}); code != http.StatusOK {
+		t.Fatalf("faucet good address after bad ones: got %d, want 200", code)
+	}
+	waitFor(t, 5*time.Second, func() bool {
+		var a struct {
+			Balance uint64 `json:"balance"`
+		}
+		getJSON(t, ts.URL+"/account?address="+good, &a)
+		return a.Balance > 0
+	}, "faucet did not fund after a rejected request")
 }
 
 func waitFor(t *testing.T, d time.Duration, cond func() bool, msg string) {

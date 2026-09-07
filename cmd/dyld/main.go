@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -81,25 +82,30 @@ func newWallet() wallet {
 }
 
 const (
-	maxBlockTxs = 64  // cap proposer work per block regardless of mempool size
-	maxViewers  = 512 // concurrent /events streams
+	maxBlockTxs       = 64               // cap proposer work per block regardless of mempool size
+	maxViewers        = 512              // /events streams in total
+	maxViewersPerIP   = 3                // /events streams from one address
+	streamMaxLifetime = 30 * time.Minute // then the /events connection is closed
+	maxSeen           = 500              // addresses kept in the seen list
 )
 
 type server struct {
 	cluster  *chain.Cluster
 	faucet   wallet
 	accounts map[string]wallet // name -> wallet, the demo recipients
-	writes   *limiter          // rate limit for /tx and /faucet
-	viewers  atomic.Int64      // live /events connections
+	writes   *ipLimiters       // per-IP rate limit for /tx and /faucet
+	viewers  atomic.Int64      // live /events connections in total
 
 	origStake []uint64 // per-validator stake at genesis, for the fault budget
 	origTotal uint64
 
-	mu         sync.Mutex
-	nonces     map[string]int64    // server-held wallets: next nonce to use
-	seen       map[string]struct{} // addresses observed via /tx and /faucet
-	lastFaucet map[string]time.Time
-	faulty     map[int]bool // validators MakeFaulty has been called on
+	mu          sync.Mutex
+	nonces      map[string]int64 // server-held wallets: next nonce to use
+	seenList    []string         // addresses observed via /tx and /faucet, oldest first
+	seenSet     map[string]bool
+	lastFaucet  map[string]time.Time
+	faulty      map[int]bool   // validators MakeFaulty has been called on
+	viewersByIP map[string]int // live /events connections per address
 }
 
 func newServer(n int) *server {
@@ -107,13 +113,14 @@ func newServer(n int) *server {
 		n = 4
 	}
 	s := &server{
-		faucet:     newWallet(),
-		accounts:   map[string]wallet{},
-		writes:     newLimiter(5, 20), // 5/s, burst 20, shared across /tx and /faucet
-		nonces:     map[string]int64{},
-		seen:       map[string]struct{}{},
-		lastFaucet: map[string]time.Time{},
-		faulty:     map[int]bool{},
+		faucet:      newWallet(),
+		accounts:    map[string]wallet{},
+		writes:      newIPLimiters(5, 20, 4096), // 5/s, burst 20, per IP; 4096 IPs tracked
+		nonces:      map[string]int64{},
+		seenSet:     map[string]bool{},
+		lastFaucet:  map[string]time.Time{},
+		faulty:      map[int]bool{},
+		viewersByIP: map[string]int{},
 	}
 
 	alloc := map[string]uint64{
@@ -167,6 +174,57 @@ func (l *limiter) allow() bool {
 	return true
 }
 
+// ipLimiters is a bucket per client address in a bounded FIFO, plus a
+// global bucket so a spread of IPs still cannot exceed a total rate. When
+// the map is full the oldest IP is dropped.
+type ipLimiters struct {
+	mu          sync.Mutex
+	m           map[string]*limiter
+	order       []string
+	rate, burst float64
+	max         int
+	global      *limiter
+}
+
+func newIPLimiters(rate, burst float64, max int) *ipLimiters {
+	return &ipLimiters{
+		m:      map[string]*limiter{},
+		rate:   rate,
+		burst:  burst,
+		max:    max,
+		global: newLimiter(rate*20, burst*10),
+	}
+}
+
+func (l *ipLimiters) allow(ip string) bool {
+	if !l.global.allow() {
+		return false
+	}
+	l.mu.Lock()
+	lim := l.m[ip]
+	if lim == nil {
+		if len(l.order) >= l.max {
+			delete(l.m, l.order[0])
+			l.order = l.order[1:]
+		}
+		lim = newLimiter(l.rate, l.burst)
+		l.m[ip] = lim
+		l.order = append(l.order, ip)
+	}
+	l.mu.Unlock()
+	return lim.allow()
+}
+
+// clientIP is the request's source address without the port. It trusts
+// RemoteAddr only: no X-Forwarded-For, so a proxy would need its own limit.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 // drive submits a small transfer between two random demo accounts on a
 // timer, so blocks are not always empty.
 func (s *server) drive(ctx context.Context, every time.Duration) {
@@ -186,15 +244,19 @@ func (s *server) drive(ctx context.Context, every time.Duration) {
 			if from.addr == to.addr {
 				continue
 			}
-			tx := s.sign(from, to.addr, uint64(1+rand.Intn(50))*chain.BlockReward/100)
-			_ = s.cluster.Submit(tx)
+			tx, rollback := s.signFrom(from, to.addr, uint64(1+rand.Intn(50))*chain.BlockReward/100)
+			if s.cluster.Submit(tx) != nil {
+				rollback()
+			}
 		}
 	}
 }
 
-// sign builds and signs a transfer from a server-held wallet, using a
-// locally tracked nonce so back-to-back sends do not collide.
-func (s *server) sign(from wallet, to string, amount uint64) chain.Transaction {
+// signFrom builds and signs a transfer from a server-held wallet, reserving
+// the next nonce. It returns a rollback to call if the transaction is not
+// accepted, so a rejected send does not leave the local nonce ahead of the
+// chain forever.
+func (s *server) signFrom(from wallet, to string, amount uint64) (tx chain.Transaction, rollback func()) {
 	s.mu.Lock()
 	_, chainNonce := s.cluster.Account(from.addr)
 	nonce := chainNonce
@@ -204,19 +266,33 @@ func (s *server) sign(from wallet, to string, amount uint64) chain.Transaction {
 	s.nonces[from.addr] = nonce + 1
 	s.mu.Unlock()
 
-	tx := chain.Transaction{From: from.addr, To: to, Amount: amount, Nonce: nonce}
+	tx = chain.Transaction{From: from.addr, To: to, Amount: amount, Nonce: nonce}
 	tx.Signature = tx.Sign(from.priv)
-	return tx
+	return tx, func() {
+		s.mu.Lock()
+		if s.nonces[from.addr] == nonce+1 {
+			s.nonces[from.addr] = nonce
+		}
+		s.mu.Unlock()
+	}
 }
 
+// markSeen records addresses in a bounded FIFO. Submit has already checked
+// that anything passed here is a well-formed address.
 func (s *server) markSeen(addrs ...string) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, a := range addrs {
-		if a != "" {
-			s.seen[a] = struct{}{}
+		if a == "" || s.seenSet[a] {
+			continue
 		}
+		if len(s.seenList) >= maxSeen {
+			delete(s.seenSet, s.seenList[0])
+			s.seenList = s.seenList[1:]
+		}
+		s.seenList = append(s.seenList, a)
+		s.seenSet[a] = true
 	}
-	s.mu.Unlock()
 }
 
 func (s *server) routes() http.Handler {
@@ -231,10 +307,16 @@ func (s *server) routes() http.Handler {
 	return withCORS(maxBody(mux))
 }
 
-// limited fronts a handler with the shared write rate limiter.
+// limited fronts a POST-only handler with the per-IP write rate limiter.
+// The method check comes first so a wrong-method request cannot spend a
+// token.
 func (s *server) limited(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.writes.allow() {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		if !s.writes.allow(clientIP(r)) {
 			http.Error(w, "rate limited, slow down", http.StatusTooManyRequests)
 			return
 		}
@@ -273,12 +355,13 @@ func (s *server) handleState(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	s.mu.Lock()
-	seen := make([]accountView, 0, len(s.seen))
-	for a := range s.seen {
+	seenAddrs := append([]string(nil), s.seenList...)
+	s.mu.Unlock()
+	seen := make([]accountView, 0, len(seenAddrs))
+	for _, a := range seenAddrs {
 		bal, _ := s.cluster.Account(a)
 		seen = append(seen, accountView{Address: a, Balance: bal})
 	}
-	s.mu.Unlock()
 	sort.Slice(seen, func(i, j int) bool { return seen[i].Address < seen[j].Address })
 
 	writeJSON(w, map[string]any{
@@ -314,6 +397,23 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.viewers.Add(-1)
 
+	ip := clientIP(r)
+	s.mu.Lock()
+	if s.viewersByIP[ip] >= maxViewersPerIP {
+		s.mu.Unlock()
+		http.Error(w, "too many streams from your address", http.StatusServiceUnavailable)
+		return
+	}
+	s.viewersByIP[ip]++
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if s.viewersByIP[ip]--; s.viewersByIP[ip] <= 0 {
+			delete(s.viewersByIP, ip)
+		}
+		s.mu.Unlock()
+	}()
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -321,21 +421,38 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch := s.cluster.Subscribe()
 	defer s.cluster.Unsubscribe(ch)
 
-	enc := json.NewEncoder(w)
+	rc := http.NewResponseController(w)
+	life := time.NewTimer(streamMaxLifetime)
+	defer life.Stop()
 	ping := time.NewTicker(15 * time.Second)
 	defer ping.Stop()
+
+	// write pushes a frame with a short deadline, so a client that stops
+	// reading errors out instead of parking this goroutine forever.
+	write := func(frame string) bool {
+		_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		if _, err := fmt.Fprint(w, frame); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-life.C:
+			return
 		case <-ping.C:
-			fmt.Fprint(w, ": ping\n\n")
-			flusher.Flush()
+			if !write(": ping\n\n") {
+				return
+			}
 		case e := <-ch:
-			fmt.Fprint(w, "data: ")
-			_ = enc.Encode(e) // writes the JSON object plus a newline
-			fmt.Fprint(w, "\n")
-			flusher.Flush()
+			b, _ := json.Marshal(e)
+			if !write("data: " + string(b) + "\n\n") {
+				return
+			}
 		}
 	}
 }
@@ -371,8 +488,12 @@ func (s *server) handleFaucet(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Address string `json:"address"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Address == "" {
-		http.Error(w, "address required", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad JSON", http.StatusBadRequest)
+		return
+	}
+	if !chain.ValidAddress(body.Address) || body.Address == s.faucet.addr {
+		http.Error(w, "a valid, non-faucet address is required", http.StatusBadRequest)
 		return
 	}
 
@@ -386,8 +507,9 @@ func (s *server) handleFaucet(w http.ResponseWriter, r *http.Request) {
 	s.lastFaucet[body.Address] = time.Now()
 	s.mu.Unlock()
 
-	tx := s.sign(s.faucet, body.Address, 100*chain.BlockReward)
+	tx, rollback := s.signFrom(s.faucet, body.Address, 100*chain.BlockReward)
 	if err := s.cluster.Submit(tx); err != nil {
+		rollback()
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
