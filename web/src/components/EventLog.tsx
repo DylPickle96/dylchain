@@ -27,8 +27,10 @@ export function EventLog({
         <div className="empty">no events yet</div>
       ) : (
         <div className="events scroll tall">
-          {events.map((e, i) => (
-            <div className={`row ${e.kind}`} key={`${e.height}-${e.kind}-${i}`}>
+          {events.map((e) => (
+            // Stable key: events are prepended, so an index would shift every
+            // row's key each second and remount the whole list.
+            <div className={`row ${e.kind}`} key={`${e.received}-${e.kind}-${e.height}`}>
               <span className="at mono">{clock(e.received)}</span>
               <span className="ico">
                 <Icon name={ICONS[e.kind]} size={13} />

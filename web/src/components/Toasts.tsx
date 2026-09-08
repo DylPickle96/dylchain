@@ -8,6 +8,7 @@ type Toast = { id: string; kind: 'slash' | 'heal'; text: string }
 // the fault button is seen even when the event log is scrolled away.
 export function Toasts({ events, names }: { events: ClusterEvent[]; names: (a: string) => Name }) {
   const seen = useRef<Set<string> | null>(null)
+  const timers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
   const [toasts, setToasts] = useState<Toast[]>([])
 
   useEffect(() => {
@@ -36,11 +37,21 @@ export function Toasts({ events, names }: { events: ClusterEvent[]; names: (a: s
     if (fresh.length === 0) return
 
     setToasts((prev) => [...fresh, ...prev].slice(0, 4))
-    const timers = fresh.map((t) =>
-      setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== t.id)), 6500),
-    )
-    return () => timers.forEach(clearTimeout)
+    // Dismiss timers live in a ref so the next state poll re-running this
+    // effect does not cancel them; they are only cleared on unmount.
+    for (const t of fresh) {
+      const id = setTimeout(() => {
+        timers.current.delete(id)
+        setToasts((prev) => prev.filter((x) => x.id !== t.id))
+      }, 6500)
+      timers.current.add(id)
+    }
   }, [events, names])
+
+  useEffect(() => {
+    const pending = timers.current
+    return () => pending.forEach(clearTimeout)
+  }, [])
 
   if (toasts.length === 0) return null
   return (
