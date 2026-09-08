@@ -178,6 +178,16 @@ effective height on, the offender is skipped for proposer selection and
 weighs nothing in the tally. `Cluster.Evidence()` gathers what the cluster
 caught.
 
+`Cluster.SetHealDelay(heights)` makes a slash temporary. `heights` after a
+slash takes effect, every node restores that validator's stake, drops the
+"already caught" guard so it can be slashed again, and (on the offender's
+own node) stops the double-voting. The restore is scheduled the same way
+the slash is, at a fixed height every node agrees on, so the accumulators
+stay in step. The offender rejoins the rotation at the back. A zero delay,
+the library default, leaves a slash permanent. The demo server sets it (see
+`-heal-after`) so an unattended deployment recovers on its own after
+someone plays with the fault button.
+
 This is the only fault handled, and it is not the real design: evidence
 lives only in node memory, not in a block, so a chain replayed from its
 blocks alone would not know a validator was slashed. A production chain
@@ -229,15 +239,19 @@ background so the chain is never idle. It serves an API on `:8080`:
 | Route | |
 |-------|-|
 | `GET /state` | genesis time, height, supply, recent blocks and transactions, validators, demo accounts, seen addresses |
-| `GET /events` | Server-Sent Events: one frame per block, slash, and node halt |
+| `GET /events` | Server-Sent Events: one frame per block, slash, heal, and node halt |
 | `GET /account?address=` | balance and next nonce |
 | `POST /tx` | a signed `Transaction` as JSON |
 | `POST /faucet` | `{"address": "..."}`, funds it from the faucet |
-| `POST /fault` | `{"index": N}`, makes validator N double-vote |
+| `POST /fault` | `{"index": N}`, makes validator N double-vote; 409 if that would slash a third of stake |
 
-Flags: `-validators`, `-addr`, `-block-time`, `-tx-every`. It serves the
-built UI from `web/dist` when that exists, otherwise just the API. That
-static handler hides dotfiles and will not list a directory.
+A faulted validator is slashed, then restored a couple of minutes later, so
+the fault budget frees up again and an unattended demo does not degrade.
+
+Flags: `-validators`, `-addr`, `-block-time`, `-tx-every`, `-heal-after`
+(heights between a slash and its recovery, 0 to keep slashes permanent). It
+serves the built UI from `web/dist` when that exists, otherwise just the
+API. That static handler hides dotfiles and will not list a directory.
 
 ## The explorer and wallet
 
@@ -252,10 +266,11 @@ The page is a small explorer. A stat strip shows height, block time, a
 transactions-per-block sparkline, circulating supply with the minted total,
 and bonded stake. The validator table sits under a stacked voting-power bar
 with the ⅓ and ⅔ consensus thresholds marked. Open a validator to see which
-recent blocks it proposed and a button that makes it double-vote, and watch
-the slash arrive in the event log two blocks later. Block and transaction
-feeds update live, blocks expand to list their transactions, and the search
-box looks up any address or recent block height.
+recent blocks it proposed and a button that makes it double-vote, watch the
+slash arrive in the event log two blocks later, and watch it rejoin the set
+a few minutes after that. Block and transaction feeds update live, blocks
+expand to list their transactions, and the search box looks up any address
+or recent block height.
 
 It also holds a burner wallet: an ed25519 key pair generated in the browser
 and kept in `localStorage`. Visitors fund it from the faucet and send DYL to

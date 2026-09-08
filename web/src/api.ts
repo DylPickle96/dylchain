@@ -45,7 +45,7 @@ export type State = {
 }
 
 export type ClusterEvent = {
-  kind: 'block' | 'slash' | 'halt'
+  kind: 'block' | 'slash' | 'heal' | 'halt'
   height: number
   validator: string
   received: number

@@ -6,7 +6,8 @@ Context for resuming work. Not user-facing (see `README.md` for that).
 
 Stages 1 to 6 done (BFT consensus, happy path only). 7a: blocks mint a
 reward to their proposer. 7b: nodes catch a validator that double-votes.
-7c: a caught double-voter is slashed to zero stake. 7.5: measured, the
+7c: a caught double-voter is slashed to zero stake, then auto-healed a set
+number of heights later so an unattended demo recovers. 7.5: measured, the
 cluster already scales to ~200 validators, only the inbox buffer needed a
 fix. Stage 8a done (live-cluster primitives: RunContext, Snapshot, events). 8b done: cmd/dyld serves the live cluster over HTTP + SSE. Stage 9a done:
 the read-only explorer (block feed, validator table, event log). 9b done:
@@ -212,6 +213,31 @@ permanent stall. Still not the real design, though: evidence lives in node
 memory, not in a block, so a chain replayed from its blocks alone would
 not know a validator was slashed.
 
+### Auto-heal (added later, for the unattended deploy)
+
+`Cluster.SetHealDelay(heights)` makes a slash reversible. When a slash is
+scheduled, `observe` also records `pendingHeal[offender] = evidence.Height
++ slashDelay + healDelay`. The `run` loop applies it the same way it
+applies a slash, at a height every node agrees on, so the accumulators stay
+in step. A heal calls `election.restore` (stake back to `origStake`,
+priority reset to the current minimum so it rejoins at the back),
+`ValidatorSet.Restore`, drops the node's `slashed[offender]` guard so it
+can be caught again, and emits a `heal` event. The offender's own node
+clears its `byzantine` flag at the *slash* height, not the heal height, so
+there are no stale equivocations left to re-detect during the per-node skew
+of applying the heal. `healDelay` 0 (the library default) keeps a slash
+permanent; `cmd/dyld` sets it (`-heal-after`, default 120 heights, about
+two minutes at the default block time). The reference `ProposerForHeight`
+diverges from the running election on a set that has been healed; it is
+test-only and that is documented on it.
+
+Because the demo's `/fault` budget now reads live cluster state
+(`Cluster.Faulty(i)` plus `Snapshot` slashed flags) instead of a server
+side `faulty` map, a healed validator hands its budget back and `/fault`
+opens up again on its own. `faultMu` serialises the check with
+`MakeFaulty` so two concurrent requests cannot both fit a budget only one
+of them does.
+
 ## Stage 7.5: scaling pass - done, mostly by measuring
 
 Target was ~100 to 200 validators, a block every 1 to 3 seconds. Added
@@ -325,7 +351,8 @@ git log around "audit follow-up").
   cannot leave the faucet's local nonce ahead of the chain forever.
 - `/fault` refuses (409) once faulty-plus-slashed stake would reach a
   third of the original total, and returns early (202, no work) when the
-  index is already faulty.
+  index is already faulty. The budget reads live cluster state, so it
+  reopens once a slashed validator auto-heals (see stage 7c).
 - The seen-address list is a bounded FIFO (500), evicting the oldest,
   instead of an unbounded map that `/state` re-serialised in full.
 - `seenVotes` on each node is pruned to a two-height window; without that

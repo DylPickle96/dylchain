@@ -78,6 +78,7 @@ const paths: Record<string, string> = {
   check: 'm5 12 4 4L19 6',
   x: 'M6 6l12 12M18 6 6 18',
   bolt: 'M13 2 4 14h7l-1 8 9-12h-7z',
+  heal: 'M20 11a8 8 0 1 0-2.3 5.7M20 4v5h-5',
   block: 'M12 3 4 7.5v9L12 21l8-4.5v-9zM4 7.5 12 12l8-4.5M12 12v9',
   arrow: 'M5 12h14m-6-6 6 6-6 6',
   alert: 'M12 3 2 20h20zM12 9v5m0 3h.01',

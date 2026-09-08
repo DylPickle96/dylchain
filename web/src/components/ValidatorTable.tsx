@@ -144,7 +144,7 @@ function Detail({
     setNote(null)
     const err = await postFault(index)
     setPending(false)
-    setNote(err ?? 'Fault injected. On its next vote this validator signs two conflicting blocks. Watch the event log.')
+    setNote(err ?? 'Fault injected. This validator now signs two conflicting blocks per round until it is slashed, then recovers on its own a few minutes later. Watch the event log.')
   }
 
   return (
@@ -184,7 +184,7 @@ function Detail({
           <div className="fault-done">
             <Icon name="alert" />
             <span>
-              Slashed{slashedAt ? ` at block ${slashedAt.toLocaleString('en-US')}` : ''}. Its stake is gone and it no longer proposes or votes.
+              Slashed{slashedAt ? ` at block ${slashedAt.toLocaleString('en-US')}` : ''}. Its stake is gone and it no longer proposes or votes. The demo restores it after a couple of minutes.
             </span>
           </div>
         ) : (
@@ -194,7 +194,7 @@ function Detail({
               Make this validator double-vote
             </button>
             <span className="fault-hint">
-              Every other node will catch the conflicting signatures and slash it two blocks later.
+              Every other node catches the conflicting signatures and slashes it two blocks later. It rejoins the set on its own a few minutes after that.
             </span>
           </>
         )}

@@ -61,11 +61,12 @@ type TxInfo struct {
 }
 
 // Event is a thing worth telling a watcher about: a committed block, a
-// slashed validator, or a node that halted.
+// slashed validator, a validator whose stake was restored, or a node that
+// halted.
 type Event struct {
-	Kind      string `json:"kind"` // "block", "slash", or "halt"
+	Kind      string `json:"kind"` // "block", "slash", "heal", or "halt"
 	Height    int64  `json:"height"`
-	Validator string `json:"validator"` // proposer for "block", offender/halted node otherwise
+	Validator string `json:"validator"` // proposer for "block", offender/halted/healed node otherwise
 }
 
 // ValidatorInfo is one validator's state in a Snapshot.
@@ -129,6 +130,7 @@ func NewCluster(alloc map[string]uint64, set *ValidatorSet, maxBlockTxs int) *Cl
 			seenVotes:    make(map[int64]map[string]vote),
 			slashed:      make(map[string]bool),
 			pendingSlash: make(map[string]int64),
+			pendingHeal:  make(map[string]int64),
 			election:     newElection(set),
 		})
 	}
@@ -250,6 +252,19 @@ func (c *Cluster) recordSlash(addr string, height int64) {
 	c.emit(Event{Kind: "slash", Height: height, Validator: addr})
 }
 
+// recordHeal is called by every node when a scheduled heal takes effect.
+// The first call clears the slashed flag and emits one heal event; the
+// rest are no-ops.
+func (c *Cluster) recordHeal(addr string, height int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.slashed[addr] {
+		return
+	}
+	delete(c.slashed, addr)
+	c.emit(Event{Kind: "heal", Height: height, Validator: addr})
+}
+
 // recordHalt is called by a node's run loop when it stops on an impossible
 // consensus state instead of panicking the shared process.
 func (c *Cluster) recordHalt(addr, reason string) {
@@ -352,10 +367,28 @@ func (c *Cluster) Chain(i int) *Chain {
 	return c.nodes[i].chain
 }
 
-// MakeFaulty makes validator i double-vote every height, so the cluster can
-// be seen catching and slashing it.
+// MakeFaulty makes validator i double-vote, so the cluster can be seen
+// catching and slashing it. The node goes quiet again once its own slash
+// takes effect; a heal delay then restores its stake and lets it be
+// faulted afresh.
 func (c *Cluster) MakeFaulty(i int) {
 	c.nodes[i].byzantine.Store(true)
+}
+
+// Faulty reports whether validator i is equivocating right now: MakeFaulty
+// has been called and the resulting slash has not yet taken effect.
+func (c *Cluster) Faulty(i int) bool {
+	return c.nodes[i].byzantine.Load()
+}
+
+// SetHealDelay sets how many heights after a slash takes effect a
+// validator's stake is restored, its double-voting stops, and it can be
+// caught again. Zero, the default, leaves a slash permanent. Call it before
+// the run starts.
+func (c *Cluster) SetHealDelay(heights int64) {
+	for _, n := range c.nodes {
+		n.healDelay = heights
+	}
 }
 
 // Evidence returns the equivocation evidence the cluster has gathered, one

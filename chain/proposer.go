@@ -18,6 +18,7 @@ const slashDelay = 2
 type election struct {
 	addresses  []string
 	stake      []uint64 // effective stake, zeroed when a slash takes effect
+	origStake  []uint64 // stake to put back when a heal takes effect
 	priorities []int64  // the accumulator, indexed like addresses
 }
 
@@ -28,11 +29,13 @@ func newElection(set *ValidatorSet) *election {
 	e := &election{
 		addresses:  make([]string, len(set.members)),
 		stake:      make([]uint64, len(set.members)),
+		origStake:  make([]uint64, len(set.members)),
 		priorities: make([]int64, len(set.members)),
 	}
 	for i, m := range set.members {
 		e.addresses[i] = m.address
 		e.stake[i] = m.stake
+		e.origStake[i] = m.stake
 	}
 	return e
 }
@@ -45,6 +48,38 @@ func (e *election) slash(addr string) {
 			return
 		}
 	}
+}
+
+// restore undoes a slash: the validator's effective stake goes back to its
+// original value, and its accumulator priority is set to the lowest among
+// the validators that still have stake, so it rejoins the rotation at the
+// back rather than proposing several blocks in a row to work off a stale
+// priority. Every node calls this at the same height, so they stay in step.
+func (e *election) restore(addr string) {
+	idx := -1
+	for i, a := range e.addresses {
+		if a == addr {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return
+	}
+	e.stake[idx] = e.origStake[idx]
+
+	low := int64(0)
+	first := true
+	for i := range e.stake {
+		if i == idx || e.stake[i] == 0 {
+			continue
+		}
+		if first || e.priorities[i] < low {
+			low = e.priorities[i]
+			first = false
+		}
+	}
+	e.priorities[idx] = low
 }
 
 // next advances one height and returns that height's proposer address:

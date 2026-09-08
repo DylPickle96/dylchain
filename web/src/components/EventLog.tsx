@@ -1,6 +1,13 @@
 import type { ClusterEvent, Name } from '../api'
 import { Icon } from './bits'
 
+const ICONS = {
+  block: 'block',
+  slash: 'bolt',
+  heal: 'heal',
+  halt: 'alert',
+} as const
+
 export function EventLog({
   events,
   names,
@@ -24,7 +31,7 @@ export function EventLog({
             <div className={`row ${e.kind}`} key={`${e.height}-${e.kind}-${i}`}>
               <span className="at mono">{clock(e.received)}</span>
               <span className="ico">
-                <Icon name={e.kind === 'block' ? 'block' : e.kind === 'slash' ? 'bolt' : 'alert'} size={13} />
+                <Icon name={ICONS[e.kind]} size={13} />
               </span>
               <span className="what">{describe(e, names)}</span>
             </div>
@@ -43,6 +50,8 @@ function describe(e: ClusterEvent, names: (a: string) => Name): string {
       return `Block ${h} committed, proposed by ${who}`
     case 'slash':
       return `${who} slashed: it signed two conflicting votes at block ${h}`
+    case 'heal':
+      return `${who} restored at block ${h}: stake returned, back in the validator set`
     case 'halt':
       return `${who} halted at block ${h}`
   }

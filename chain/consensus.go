@@ -122,8 +122,10 @@ type node struct {
 	evidence     []Evidence
 	slashed      map[string]bool  // offenders detected, to stop re-detecting
 	pendingSlash map[string]int64 // offender -> height its slash takes effect
+	pendingHeal  map[string]int64 // offender -> height its stake is restored
+	healDelay    int64            // heights after a slash to restore stake; 0 disables
 	election     *election        // proposer accumulator and stake view
-	byzantine    atomic.Bool      // set by MakeFaulty, possibly mid-run
+	byzantine    atomic.Bool      // set by MakeFaulty, cleared when a heal lands
 }
 
 const (
@@ -166,12 +168,30 @@ func (n *node) run(maxHeight int64) {
 			return
 		}
 		// Apply any slash whose effective height has arrived, before this
-		// height's proposer and threshold are computed from it.
+		// height's proposer and threshold are computed from it. If the
+		// offender is this node, stop equivocating now: its votes carry no
+		// weight from here on, and going quiet before the heal clears the
+		// re-detection guard means there is nothing stale left to re-catch.
 		for addr, eff := range n.pendingSlash {
 			if eff <= h {
 				n.election.slash(addr)
 				n.set.Slash(addr) // idempotent; keeps the shared set honest for display
+				if addr == n.self.address {
+					n.byzantine.Store(false)
+				}
 				delete(n.pendingSlash, addr)
+			}
+		}
+		// Apply any heal whose height has arrived: put the stake back and
+		// let the offender be caught again. Scheduled strictly after the
+		// matching slash, so the two never fire at the same height.
+		for addr, eff := range n.pendingHeal {
+			if eff <= h {
+				n.election.restore(addr)
+				n.set.Restore(addr)
+				delete(n.slashed, addr)
+				delete(n.pendingHeal, addr)
+				n.cluster.recordHeal(addr, h)
 			}
 		}
 		n.runHeight(h)
@@ -364,6 +384,9 @@ func (n *node) observe(m message) {
 			n.evidence = append(n.evidence, e)
 			n.slashed[v.voter] = true
 			n.pendingSlash[e.Offender] = e.Height + slashDelay
+			if n.healDelay > 0 {
+				n.pendingHeal[e.Offender] = e.Height + slashDelay + n.healDelay
+			}
 			n.cluster.recordSlash(e.Offender, e.Height)
 		}
 	}

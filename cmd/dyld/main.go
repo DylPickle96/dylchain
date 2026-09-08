@@ -36,6 +36,7 @@ func main() {
 		addr       = flag.String("addr", ":8080", "HTTP listen address")
 		blockTime  = flag.Duration("block-time", time.Second, "minimum time between blocks")
 		txEvery    = flag.Duration("tx-every", 2*time.Second, "how often the driver submits a transaction")
+		healAfter  = flag.Int64("heal-after", healDelay, "heights after a slash to restore a validator; 0 keeps it permanent")
 	)
 	flag.Parse()
 
@@ -45,6 +46,7 @@ func main() {
 	defer stop()
 
 	srv.cluster.PaceBlocks(*blockTime)
+	srv.cluster.SetHealDelay(*healAfter)
 	go srv.cluster.RunContext(ctx)
 	go srv.drive(ctx, *txEvery)
 
@@ -103,14 +105,21 @@ type server struct {
 	origStake []uint64 // per-validator stake at genesis, for the fault budget
 	origTotal uint64
 
+	faultMu sync.Mutex // serialises the /fault budget check with MakeFaulty
+
 	mu          sync.Mutex
 	nonces      map[string]int64 // server-held wallets: next nonce to use
 	seenList    []string         // addresses observed via /tx and /faucet, oldest first
 	seenSet     map[string]bool
 	lastFaucet  map[string]time.Time
-	faulty      map[int]bool   // validators MakeFaulty has been called on
 	viewersByIP map[string]int // live /events connections per address
 }
+
+// healDelay is how many heights after a slash the demo restores a
+// validator: stake back, double-voting stopped, catchable again. At the
+// default one-second block time that is about two minutes, long enough to
+// watch the slash land, short enough that an unattended demo heals itself.
+const healDelay = 120
 
 func newServer(n int) *server {
 	if n < 4 {
@@ -124,7 +133,6 @@ func newServer(n int) *server {
 		nonces:      map[string]int64{},
 		seenSet:     map[string]bool{},
 		lastFaucet:  map[string]time.Time{},
-		faulty:      map[int]bool{},
 		viewersByIP: map[string]int{},
 	}
 
@@ -630,33 +638,34 @@ func (s *server) handleFault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	if s.faulty[body.Index] {
-		s.mu.Unlock()
-		w.WriteHeader(http.StatusAccepted) // already faulty, nothing to do
+	// faultMu serialises the whole check-then-act so two concurrent
+	// requests cannot both pass a budget that only one of them fits.
+	s.faultMu.Lock()
+	defer s.faultMu.Unlock()
+
+	if s.cluster.Faulty(body.Index) {
+		w.WriteHeader(http.StatusAccepted) // already equivocating, nothing to do
 		return
 	}
-	s.mu.Unlock()
 
 	// Refuse if faulty-plus-slashed stake would reach a third of the
-	// original total, so the honest set can always still make two thirds
-	// and the demo stays recoverable. The Snapshot is only reached for a
-	// genuinely new fault.
+	// original total, so the honest set can always still make two thirds.
+	// Both inputs come from live cluster state, so once a validator heals
+	// its budget is handed back and /fault opens up again on its own.
 	snap := s.cluster.Snapshot()
-	s.mu.Lock()
 	lost := s.origStake[body.Index]
 	for i, v := range snap.Validators {
-		if v.Slashed || s.faulty[i] {
+		if i == body.Index {
+			continue
+		}
+		if v.Slashed || s.cluster.Faulty(i) {
 			lost += s.origStake[i]
 		}
 	}
 	if 3*lost >= s.origTotal {
-		s.mu.Unlock()
 		http.Error(w, "fault budget reached: any more would stall consensus", http.StatusConflict)
 		return
 	}
-	s.faulty[body.Index] = true
-	s.mu.Unlock()
 
 	s.cluster.MakeFaulty(body.Index)
 	w.WriteHeader(http.StatusAccepted)

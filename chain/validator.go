@@ -10,10 +10,11 @@ import (
 // network a node would hold only its own key; here one process simulates
 // every validator, so the key travels with the rest.
 type Validator struct {
-	address string
-	privKey ed25519.PrivateKey
-	stake   uint64
-	moniker string
+	address   string
+	privKey   ed25519.PrivateKey
+	stake     uint64
+	origStake uint64 // stake at construction, so Restore can undo a Slash
+	moniker   string
 }
 
 // NewValidator derives a validator from a private key and a stake weight.
@@ -21,9 +22,10 @@ type Validator struct {
 func NewValidator(privKey ed25519.PrivateKey, stake uint64) Validator {
 	pubKey := privKey.Public().(ed25519.PublicKey)
 	return Validator{
-		address: deriveAddress(pubKey),
-		privKey: privKey,
-		stake:   stake,
+		address:   deriveAddress(pubKey),
+		privKey:   privKey,
+		stake:     stake,
+		origStake: stake,
 	}
 }
 
@@ -72,6 +74,10 @@ func (vs *ValidatorSet) TotalStake() uint64 {
 // recomputed from height 1 on every call, so it stays a pure function of
 // the height and the set. Equal stakes reduce to plain round-robin; ties
 // break by member index. O(height * len(members)) per call.
+//
+// It is a test reference only. On a set that has been slashed and later
+// restored it diverges from the running election, which carried the slash
+// through the affected heights; the election is the authority.
 func (vs *ValidatorSet) ProposerForHeight(height int64) Validator {
 	vs.mu.RLock()
 	defer vs.mu.RUnlock()
@@ -125,8 +131,8 @@ func (vs *ValidatorSet) Contains(addr string) bool {
 	return false
 }
 
-// Slash cuts a validator's stake to zero, permanently. A second call for
-// the same address is a no-op. Safe for concurrent use.
+// Slash cuts a validator's stake to zero. A second call for the same
+// address is a no-op. Restore puts the stake back. Safe for concurrent use.
 func (vs *ValidatorSet) Slash(addr string) {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
@@ -134,6 +140,21 @@ func (vs *ValidatorSet) Slash(addr string) {
 	for i := range vs.members {
 		if vs.members[i].address == addr {
 			vs.members[i].stake = 0
+			return
+		}
+	}
+}
+
+// Restore returns a member's stake to the value it was constructed with,
+// undoing a Slash. A call for an unknown address is a no-op. Safe for
+// concurrent use.
+func (vs *ValidatorSet) Restore(addr string) {
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+
+	for i := range vs.members {
+		if vs.members[i].address == addr {
+			vs.members[i].stake = vs.members[i].origStake
 			return
 		}
 	}

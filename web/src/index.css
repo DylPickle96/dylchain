@@ -1183,6 +1183,16 @@ tr.slashed .avatar {
   font-weight: 500;
 }
 
+.events .row.heal {
+  background: rgba(74, 222, 128, 0.09);
+}
+
+.events .row.heal .what,
+.events .row.heal .ico {
+  color: var(--green);
+  font-weight: 500;
+}
+
 .events .row.halt {
   background: rgba(251, 191, 36, 0.1);
 }
