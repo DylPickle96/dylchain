@@ -4,3 +4,7 @@
 *.prof
 /dyld
 cmd/dyld/dyld
+
+# web build / deps
+web/node_modules/
+web/dist/
