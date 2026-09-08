@@ -22,14 +22,14 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 | 7 | Minting, equivocation detection, slashing | done |
 | 7.5 | Scaling to a few hundred validators | done |
 | 8 | Demo server (HTTP + SSE) | done |
-| 9 | Explorer UI | not started |
+| 9 | Explorer UI and browser burner wallet | done |
 
 ## Layout
 
 ```
 chain/     the chain library, package chain, imported as dyl/chain
 cmd/dyld/  the demo server: runs a live cluster, serves HTTP + SSE
-web/       the explorer UI, React + Vite (not built yet)
+web/       the explorer UI and burner wallet, React + Vite
 ```
 
 `chain/` is one Go package split by concern:
@@ -234,7 +234,26 @@ on `:8080`:
 | `POST /fault` | `{"index": N}`, makes validator N double-vote |
 
 Flags: `-validators`, `-addr`, `-block-time`, `-tx-every`. It serves the
-built UI from `web/dist` when that exists, otherwise just the API.
+built UI from `web/dist` when that exists, otherwise just the API. That
+static handler hides dotfiles and will not list a directory.
+
+## The explorer and wallet
+
+```
+cd web
+npm install
+npm run dev     # dev server on :5173, proxies the API to :8080
+npm run build   # writes web/dist for go run ./cmd/dyld to serve
+```
+
+The page shows the block feed, the validator table with voting-power bars
+and a per-validator fault button, and an event log. It also holds a burner
+wallet: an ed25519 key pair generated in the browser and kept in
+`localStorage`. Visitors fund it from the faucet and send DYL to validators
+or to any address they paste. The chain has no value, so a plaintext key in
+the browser is an acceptable trade for zero friction. Transactions are
+signed client-side over the same byte layout `chain/transaction.go` uses,
+so the server verifies them with no special path.
 
 ## Running the tests
 

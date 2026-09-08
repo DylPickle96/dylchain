@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -230,6 +232,39 @@ func TestFaucetRejectsBadAddressWithoutWedging(t *testing.T) {
 		getJSON(t, ts.URL+"/account?address="+good, &a)
 		return a.Balance > 0
 	}, "faucet did not fund after a rejected request")
+}
+
+func TestGuardedDir(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		full := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("index.html", "<!doctype html>root")
+	write("assets/app.js", "console.log(1)")
+	write(".env", "SECRET=1")
+
+	fsys := guardedDir{http.Dir(root)}
+
+	if f, err := fsys.Open("/assets/app.js"); err != nil {
+		t.Errorf("open asset: %v", err)
+	} else {
+		f.Close()
+	}
+	if _, err := fsys.Open("/assets"); err == nil {
+		t.Error("opened a directory without an index.html; listing is exposed")
+	}
+	if _, err := fsys.Open("/.env"); err == nil {
+		t.Error("served a dotfile")
+	}
+	if _, err := fsys.Open("/assets/../.env"); err == nil {
+		t.Error("served a dotfile through a traversal path")
+	}
 }
 
 func waitFor(t *testing.T, d time.Duration, cond func() bool, msg string) {

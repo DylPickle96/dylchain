@@ -56,20 +56,40 @@ export function shortAddr(addr: string): string {
   return addr.length > 14 ? `${addr.slice(0, 8)}…${addr.slice(-4)}` : addr
 }
 
+// dylToUdyl parses a DYL amount string into base units, or null if it is
+// not a positive number with at most 6 decimal places.
+export function dylToUdyl(input: string): bigint | null {
+  const s = input.trim()
+  if (!/^\d+(\.\d{1,6})?$/.test(s)) return null
+  const [whole, frac = ''] = s.split('.')
+  const base = BigInt(whole) * BigInt(UDYL) + BigInt(frac.padEnd(6, '0'))
+  return base > 0n ? base : null
+}
+
 export async function getState(): Promise<State> {
   const r = await fetch('/state')
   if (!r.ok) throw new Error(`/state ${r.status}`)
   return r.json()
 }
 
-export async function postFault(index: number): Promise<string | null> {
-  const r = await fetch('/fault', {
+async function post(path: string, body: unknown): Promise<string | null> {
+  const r = await fetch(path, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ index }),
+    body: JSON.stringify(body),
   })
   if (r.ok) return null
   return (await r.text()).trim() || `HTTP ${r.status}`
+}
+
+export const postFault = (index: number) => post('/fault', { index })
+export const postFaucet = (address: string) => post('/faucet', { address })
+export const postTx = (tx: unknown) => post('/tx', tx)
+
+export async function getAccount(address: string): Promise<{ balance: number; nonce: number }> {
+  const r = await fetch(`/account?address=${encodeURIComponent(address)}`)
+  if (!r.ok) throw new Error(`/account ${r.status}`)
+  return r.json()
 }
 
 // useCluster polls /state, refetching immediately whenever an /events frame

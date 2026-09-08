@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"math/rand"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -607,7 +609,7 @@ func withCORS(h http.Handler) http.Handler {
 // plain status line otherwise.
 func staticOrStatus() http.Handler {
 	if info, err := os.Stat("web/dist"); err == nil && info.IsDir() {
-		return http.FileServer(http.Dir("web/dist"))
+		return http.FileServer(guardedDir{http.Dir("web/dist")})
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -616,4 +618,36 @@ func staticOrStatus() http.Handler {
 		}
 		fmt.Fprintln(w, "dyld is running. web/dist not built yet; try /state, /events.")
 	})
+}
+
+// guardedDir is an http.FileSystem that hides dotfiles and refuses to list
+// directories: a request for a directory without an index.html reads as not
+// found rather than a browsable listing.
+type guardedDir struct{ inner http.FileSystem }
+
+func (d guardedDir) Open(name string) (http.File, error) {
+	for part := range strings.SplitSeq(name, "/") {
+		if strings.HasPrefix(part, ".") && part != "." && part != ".." {
+			return nil, fs.ErrNotExist
+		}
+	}
+	f, err := d.inner.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if info.IsDir() {
+		index := strings.TrimSuffix(name, "/") + "/index.html"
+		if idx, err := d.inner.Open(index); err != nil {
+			f.Close()
+			return nil, fs.ErrNotExist
+		} else {
+			idx.Close()
+		}
+	}
+	return f, nil
 }

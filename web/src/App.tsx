@@ -3,6 +3,7 @@ import { BlockFeed } from './components/BlockFeed'
 import { EventLog } from './components/EventLog'
 import { StatStrip } from './components/StatStrip'
 import { ValidatorTable } from './components/ValidatorTable'
+import { Wallet } from './components/Wallet'
 
 export default function App() {
   const { state, events, live, error } = useCluster()
@@ -30,7 +31,10 @@ export default function App() {
           <StatStrip state={state} />
           <div className="cols">
             <ValidatorTable state={state} />
-            <BlockFeed state={state} />
+            <div className="stack">
+              <Wallet state={state} />
+              <BlockFeed state={state} />
+            </div>
           </div>
           <EventLog events={events} state={state} />
         </>

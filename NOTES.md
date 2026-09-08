@@ -8,7 +8,11 @@ Stages 1 to 6 done (BFT consensus, happy path only). 7a: blocks mint a
 reward to their proposer. 7b: nodes catch a validator that double-votes.
 7c: a caught double-voter is slashed to zero stake. 7.5: measured, the
 cluster already scales to ~200 validators, only the inbox buffer needed a
-fix. Stage 8a done (live-cluster primitives: RunContext, Snapshot, events). 8b done: cmd/dyld serves the live cluster over HTTP + SSE. Stage 9 (the UI) is next.
+fix. Stage 8a done (live-cluster primitives: RunContext, Snapshot, events). 8b done: cmd/dyld serves the live cluster over HTTP + SSE. Stage 9a done:
+the read-only explorer (block feed, validator table, event log). 9b done:
+the browser burner wallet (localStorage ed25519 key, client-side signing,
+faucet and send). Audit finding 15 fixed alongside 9b: the static handler
+now hides dotfiles and refuses directory listings.
 
 Stage 6 tip:
 
@@ -345,17 +349,38 @@ Still deferred, judged gold-plating for a toy:
   synchronisation. Test-only today (no handler calls them, and tests only
   touch them after the run joins). Fix with a lock or a snapshot if stage
   9 adds an `/evidence` endpoint.
-- **`http.FileServer(http.Dir("web/dist"))`** renders directory listings
-  and serves dotfiles. Only matters once stage 9 builds `web/dist`; fix
-  there (404 dirs and dotfiles, or `embed.FS`).
 - **`uint64` amount overflow** in the demo's `n * chain.BlockReward` math.
 
-## Stage 9: explorer UI
+Fixed since the audit:
+
+- **Static directory listings and dotfiles** (was
+  `http.FileServer(http.Dir("web/dist"))`). `guardedDir` in `cmd/dyld`
+  wraps the `http.Dir`: any path segment starting with `.` is `ErrNotExist`,
+  and a directory with no `index.html` is `ErrNotExist` rather than a
+  browsable listing. `TestGuardedDir` covers it.
+
+## Stage 9: explorer UI and burner wallet
 
 React + Vite, a separate frontend project, talks to the stage 8 server.
-Stripped explorer: block feed, validator table with voting-power bars,
-supply counter, event log. The `POST /fault` button is the story: click
-it, a validator's bar drops, a slash event lands in the feed.
+
+**9a, the explorer.** Block feed, validator table with voting-power bars,
+supply counter, event log. `useCluster` polls `/state` every 4 s and
+refetches on every `/events` frame. The `POST /fault` button is the story:
+click it, a validator's bar drops, a slash event lands in the feed. Supply
+tile shows circulating supply (total minus the faucet's parked balance) so
+minting is visible.
+
+**9b, the burner wallet.** `web/src/wallet.ts` generates an ed25519 key
+pair and keeps the private key hex in `localStorage` under `dyl.wallet.sk`
+(a storage failure yields an ephemeral key). Dylan signed off on plaintext
+in the browser: the coin has no value. `signableBytes` there mirrors
+`chain/transaction.go` byte for byte: `From ‖ 0x00 ‖ To ‖ 0x00 ‖ Amount
+(8 BE) ‖ Nonce (8 BE)`, using `DataView.setBigUint64`. The signature goes
+out as standard base64, which is what Go's `json.Unmarshal` wants for a
+`[]byte`. Verified end to end against a running `dyld`: a browser-signed tx
+passes `Cluster.Submit`'s `ed25519.Verify` and moves funds, no server-side
+special case. Uses `@noble/curves` and `@noble/hashes` (both pinned in
+`web/package.json`; import paths need the `.js` suffix on v2).
 
 ## Parked design questions
 
