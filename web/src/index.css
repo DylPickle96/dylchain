@@ -119,7 +119,7 @@ button:disabled {
   align-items: center;
   gap: 18px;
   padding: 14px 0;
-  margin: 0 -24px 6px;
+  margin: 0 -24px 22px;
   padding-left: 24px;
   padding-right: 24px;
   background: rgba(15, 10, 26, 0.72);
@@ -242,31 +242,6 @@ button:disabled {
   50% {
     box-shadow: 0 0 0 6px rgba(74, 222, 128, 0.05);
   }
-}
-
-/* intro */
-
-.intro {
-  padding: 34px 0 26px;
-  max-width: 760px;
-}
-
-.intro h1 {
-  font-size: 30px;
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  line-height: 1.15;
-  background: linear-gradient(90deg, #fff 0%, #d9ccff 60%, var(--accent) 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  margin-bottom: 12px;
-}
-
-.intro p {
-  color: var(--ink-dim);
-  font-size: 15px;
-  line-height: 1.6;
 }
 
 /* stat strip */
@@ -1260,9 +1235,6 @@ tr.slashed .avatar {
   }
   .status .height {
     display: none;
-  }
-  .intro h1 {
-    font-size: 24px;
   }
   .stats {
     grid-template-columns: 1fr;

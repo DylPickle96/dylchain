@@ -29,17 +29,6 @@ export default function App() {
     <div className="app">
       <Header state={state} live={live} onSearch={lookup} />
 
-      <section className="intro">
-        <h1>
-          A proof-of-stake chain, live, in one Go process.
-        </h1>
-        <p>
-          {state ? state.validators.length : 'Twenty'} validators run BFT consensus over an in-memory network and commit a block
-          every second. Open a validator below and make it double-vote: the others catch the conflicting signatures and slash
-          its stake. Grab some DYL from the faucet and send a transaction signed in your browser.
-        </p>
-      </section>
-
       {error && !state ? (
         <div className="panel">
           <div className="empty">
