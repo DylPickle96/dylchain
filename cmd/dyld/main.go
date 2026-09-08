@@ -89,7 +89,7 @@ func newWallet() wallet {
 const (
 	maxBlockTxs       = 64               // cap proposer work per block regardless of mempool size
 	maxViewers        = 512              // /events streams in total
-	maxViewersPerIP   = 3                // /events streams from one address
+	maxViewersPerIP   = 16               // /events streams from one address (NAT, a proxy, or dev churn share one)
 	streamMaxLifetime = 30 * time.Minute // then the /events connection is closed
 	maxSeen           = 500              // addresses kept in the seen list
 )
@@ -544,6 +544,11 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		flusher.Flush()
 		return true
+	}
+
+	// Tell the browser to retry quickly if the stream drops.
+	if !write("retry: 3000\n\n") {
+		return
 	}
 
 	for {

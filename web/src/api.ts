@@ -142,8 +142,8 @@ export function hue(addr: string): number {
   return h % 360
 }
 
-export async function getState(): Promise<State> {
-  const r = await fetch('/state')
+export async function getState(signal?: AbortSignal): Promise<State> {
+  const r = await fetch('/state', { signal })
   if (!r.ok) throw new Error(`/state ${r.status}`)
   return r.json()
 }
@@ -168,8 +168,10 @@ export async function getAccount(address: string): Promise<{ balance: number; no
   return r.json()
 }
 
-// useCluster polls /state, refetching immediately whenever an /events frame
-// arrives, and keeps a rolling log of those frames.
+// useCluster polls /state every few seconds and treats a successful poll as
+// "live". The /events stream is only a nudge to poll again immediately, so
+// updates feel instant; if it drops or the server caps it, the poll still
+// keeps the page current and a reconnect is retried in the background.
 export function useCluster() {
   const [state, setState] = useState<State | null>(null)
   const [events, setEvents] = useState<ClusterEvent[]>([])
@@ -179,45 +181,64 @@ export function useCluster() {
 
   useEffect(() => {
     let stopped = false
+    let es: EventSource | null = null
+    let retry: ReturnType<typeof setTimeout> | undefined
 
     const refresh = async () => {
       if (inFlight.current) return
       inFlight.current = true
       try {
-        const s = await getState()
-        if (!stopped) {
-          setState(s)
-          setError(null)
-        }
+        const s = await getState(AbortSignal.timeout(8000))
+        if (stopped) return
+        setState(s)
+        setError(null)
+        setLive(true)
       } catch (e) {
-        if (!stopped) setError(String(e))
+        if (stopped) return
+        setError(String(e))
+        setLive(false)
       } finally {
         inFlight.current = false
       }
     }
 
+    const connect = () => {
+      if (stopped) return
+      es = new EventSource('/events')
+      es.onopen = () => {
+        if (!stopped) refresh()
+      }
+      es.onmessage = (m) => {
+        if (stopped) return
+        try {
+          const ev = { ...JSON.parse(m.data), received: Date.now() } as ClusterEvent
+          setEvents((prev) => [ev, ...prev].slice(0, 80))
+        } catch {
+          return
+        }
+        refresh()
+      }
+      es.onerror = () => {
+        // A transient drop: EventSource reconnects on its own. A hard close
+        // (a non-200 such as the server's viewer cap) leaves it CLOSED for
+        // good, so retry it by hand.
+        if (stopped || !es || es.readyState !== EventSource.CLOSED) return
+        es.close()
+        es = null
+        clearTimeout(retry)
+        retry = setTimeout(connect, 3000)
+      }
+    }
+
     refresh()
     const poll = setInterval(refresh, 4000)
-
-    const es = new EventSource('/events')
-    es.onopen = () => !stopped && setLive(true)
-    es.onerror = () => !stopped && setLive(false)
-    es.onmessage = (m) => {
-      let ev: ClusterEvent
-      try {
-        ev = { ...JSON.parse(m.data), received: Date.now() }
-      } catch {
-        return
-      }
-      if (stopped) return
-      setEvents((prev) => [ev, ...prev].slice(0, 80))
-      refresh()
-    }
+    connect()
 
     return () => {
       stopped = true
       clearInterval(poll)
-      es.close()
+      clearTimeout(retry)
+      es?.close()
     }
   }, [])
 
