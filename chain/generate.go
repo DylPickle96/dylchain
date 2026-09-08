@@ -6,21 +6,23 @@ import (
 	"hash/fnv"
 )
 
-// monikers are display names for generated validators, in rank order. None
-// is a real operator. Past the end of the list a validator gets "val-NNN".
+// monikers are display names for generated validators, in rank order: the
+// Greek pantheon, Olympians first, then Titans and older powers, so the
+// largest stake goes to Zeus. None is a real operator. Past the end of the
+// list a validator gets "val-NNN".
 var monikers = []string{
-	"Northwind Staking", "Lumen Labs", "Halcyon Node", "Meridian Validation",
-	"Foxglove", "Stakehaus", "Orbital Systems", "Tidewater",
-	"Blue Ridge Nodes", "Kestrel", "Sable Infrastructure", "Ironclad Validators",
-	"Saltmarsh Collective", "Aurora Stake", "Copperline", "Driftwood DAO",
-	"Pine & Pixel", "Quartz Capital", "Vanta Node", "Riverbend",
-	"Nightjar", "Cinder Labs", "Hollow Oak", "Gravity Well",
-	"Peregrine Staking", "Basalt", "Moonrake", "Solstice Systems",
-	"Tallgrass", "Umbra Validation", "Wren & Co", "Zephyr Nodes",
-	"Cobalt Harbor", "Larkspur", "Anvil Point", "Mistral Infra",
-	"Juniper Stake", "Ember Collective", "Sequoia Node", "Glasswing",
-	"Bramble", "Ridgeway Validators", "Nimbus Ops", "Onyx Stake",
-	"Harbor Light", "Pale Fire", "Thistle", "Ironwood",
+	"Zeus", "Hera", "Poseidon", "Demeter",
+	"Athena", "Apollo", "Artemis", "Ares",
+	"Aphrodite", "Hephaestus", "Hermes", "Hestia",
+	"Hades", "Dionysus", "Persephone", "Hecate",
+	"Helios", "Selene", "Eos", "Nike",
+	"Iris", "Nemesis", "Tyche", "Pan",
+	"Eros", "Nyx", "Gaia", "Uranus",
+	"Cronus", "Rhea", "Oceanus", "Tethys",
+	"Hyperion", "Theia", "Coeus", "Phoebe",
+	"Prometheus", "Atlas", "Eris", "Hypnos",
+	"Thanatos", "Morpheus", "Boreas", "Zephyros",
+	"Notos", "Triton", "Amphitrite", "Leto",
 }
 
 const (

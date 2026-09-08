@@ -387,7 +387,7 @@ special case. Uses `@noble/curves` and `@noble/hashes` (both pinned in
 show: `Transaction.Hash()` (the Merkle leaf hash, so a tx id is exactly
 what the block commits to), `BlockInfo.Hash`, a bounded `Snapshot.Txs`
 feed (`recentTxs = 40`), and `Snapshot.Genesis` for uptime.
-`GenerateValidators` now hands out 48 fictional monikers and a geometric
+`GenerateValidators` now hands out 48 Greek-pantheon monikers and a geometric
 stake curve (88% per rank with seeded jitter, whole DYL, strictly
 decreasing, top holds ~13% of 20). The demo driver has six accounts
 (treasury, exchange, alice, bob, carol, dave) and mixes patterns: small
