@@ -40,3 +40,20 @@ func TestSignableBytes(t *testing.T) {
 		t.Error(`("ab","c") and ("a","bc") collide`)
 	}
 }
+
+// Hash is the Merkle leaf: it changes with every field including the
+// signature, and a single-transaction block's root is exactly that hash.
+func TestTransactionHash(t *testing.T) {
+	a := Transaction{From: "dylA", To: "dylB", Amount: 1, Nonce: 0, Signature: []byte{1}}
+	b := a
+	b.Signature = []byte{2}
+	if bytes.Equal(a.Hash(), b.Hash()) {
+		t.Error("hash ignores the signature")
+	}
+	if len(a.Hash()) != 32 {
+		t.Errorf("hash length %d, want 32", len(a.Hash()))
+	}
+	if !bytes.Equal(merkleRoot([]Transaction{a}), a.Hash()) {
+		t.Error("single-tx merkle root is not the tx hash")
+	}
+}

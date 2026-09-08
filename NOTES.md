@@ -12,7 +12,8 @@ fix. Stage 8a done (live-cluster primitives: RunContext, Snapshot, events). 8b d
 the read-only explorer (block feed, validator table, event log). 9b done:
 the browser burner wallet (localStorage ed25519 key, client-side signing,
 faucet and send). Audit finding 15 fixed alongside 9b: the static handler
-now hides dotfiles and refuses directory listings.
+now hides dotfiles and refuses directory listings. 9c done: the polish
+pass (see the stage 9 section), verified in headless Chromium end to end.
 
 Stage 6 tip:
 
@@ -381,6 +382,32 @@ out as standard base64, which is what Go's `json.Unmarshal` wants for a
 passes `Cluster.Submit`'s `ed25519.Verify` and moves funds, no server-side
 special case. Uses `@noble/curves` and `@noble/hashes` (both pinned in
 `web/package.json`; import paths need the `.js` suffix on v2).
+
+**9c, the polish pass.** Backend additions so the page has something to
+show: `Transaction.Hash()` (the Merkle leaf hash, so a tx id is exactly
+what the block commits to), `BlockInfo.Hash`, a bounded `Snapshot.Txs`
+feed (`recentTxs = 40`), and `Snapshot.Genesis` for uptime.
+`GenerateValidators` now hands out 48 fictional monikers and a geometric
+stake curve (88% per rank with seeded jitter, whole DYL, strictly
+decreasing, top holds ~13% of 20). The demo driver has six accounts
+(treasury, exchange, alice, bob, carol, dave) and mixes patterns: small
+person-to-person transfers on a log-normal curve, exchange withdrawals,
+treasury grants to validators, deposits, and bursts, so block sizes vary.
+
+Frontend: Inter and JetBrains Mono from Google Fonts, a sticky header with
+address-or-height search, an intro line explaining what the page is, four
+stat tiles with a txs-per-block sparkline, a stacked voting-power bar with
+⅓ and ⅔ markers, address-derived gradient avatars everywhere, expandable
+blocks listing their transactions, a transaction feed that highlights the
+visitor's own transfers, a lookup card for accounts and blocks, a
+wallet activity list, and a footer with the repo link. Layout is validators
+left, wallet + blocks + events right, transactions full width. Responsive
+to 390px (drops the stake, blocks, and hash columns).
+
+Verification: no Chrome on this Mac, so Playwright's headless Chromium was
+installed into the session scratchpad and driven through the whole story
+(faucet, browser-signed send, fault injection, slash) with screenshots.
+Nothing of that lives in the repo.
 
 ## Parked design questions
 

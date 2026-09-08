@@ -3,14 +3,18 @@ package chain
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
 )
 
-// recentBlocks is how many committed blocks a Cluster keeps for its
-// Snapshot feed.
-const recentBlocks = 30
+// recentBlocks and recentTxs are how many committed blocks and applied
+// transactions a Cluster keeps for its Snapshot feeds.
+const (
+	recentBlocks = 30
+	recentTxs    = 40
+)
 
 // Cluster runs a set of validators through one-step-vote BFT consensus in a
 // single process, connected by an in-memory bus. Validators are honest,
@@ -24,9 +28,11 @@ type Cluster struct {
 
 	// live state, updated as blocks commit, read by Snapshot and Account
 	mu       sync.Mutex
+	genesis  int64 // genesis block time, unix seconds
 	height   int64
 	supply   uint64
 	recent   []BlockInfo
+	txs      []TxInfo
 	proposed map[string]int
 	slashed  map[string]bool
 	halts    []string // "<address>: <reason>" for nodes that stopped on an impossible state
@@ -38,9 +44,20 @@ type Cluster struct {
 // BlockInfo is the summary of one committed block, for the Snapshot feed.
 type BlockInfo struct {
 	Height   int64  `json:"height"`
+	Hash     string `json:"hash"` // hex
 	Proposer string `json:"proposer"`
 	Txs      int    `json:"txs"`
 	Time     int64  `json:"time"`
+}
+
+// TxInfo is one applied transaction, for the Snapshot feed.
+type TxInfo struct {
+	Hash   string `json:"hash"` // hex
+	Height int64  `json:"height"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Amount uint64 `json:"amount"`
+	Time   int64  `json:"time"` // the block's time
 }
 
 // Event is a thing worth telling a watcher about: a committed block, a
@@ -64,9 +81,11 @@ type ValidatorInfo struct {
 // Snapshot is a consistent, lock-guarded view of the cluster for an API
 // response.
 type Snapshot struct {
+	Genesis    int64           `json:"genesis"` // genesis block time, unix seconds
 	Height     int64           `json:"height"`
 	Supply     uint64          `json:"supply"`
 	Blocks     []BlockInfo     `json:"blocks"` // recent, oldest first
+	Txs        []TxInfo        `json:"txs"`    // recent, oldest first
 	Validators []ValidatorInfo `json:"validators"`
 	Halts      []string        `json:"halts"` // nodes that stopped on an impossible state
 }
@@ -88,6 +107,7 @@ func NewCluster(alloc map[string]uint64, set *ValidatorSet, maxBlockTxs int) *Cl
 	c := &Cluster{
 		set:      set,
 		mempool:  mempool,
+		genesis:  genesis.CreatedAt,
 		proposed: make(map[string]int),
 		slashed:  make(map[string]bool),
 	}
@@ -195,12 +215,26 @@ func (c *Cluster) recordBlock(b Block, st State) {
 	c.proposed[b.Proposer]++
 	c.recent = append(c.recent, BlockInfo{
 		Height:   b.Height,
+		Hash:     hex.EncodeToString(b.Hash()),
 		Proposer: b.Proposer,
 		Txs:      len(b.Transactions),
 		Time:     b.CreatedAt,
 	})
 	if len(c.recent) > recentBlocks {
 		c.recent = c.recent[len(c.recent)-recentBlocks:]
+	}
+	for _, tx := range b.Transactions {
+		c.txs = append(c.txs, TxInfo{
+			Hash:   hex.EncodeToString(tx.Hash()),
+			Height: b.Height,
+			From:   tx.From,
+			To:     tx.To,
+			Amount: tx.Amount,
+			Time:   b.CreatedAt,
+		})
+	}
+	if len(c.txs) > recentTxs {
+		c.txs = append([]TxInfo(nil), c.txs[len(c.txs)-recentTxs:]...)
 	}
 	c.emit(Event{Kind: "block", Height: b.Height, Validator: b.Proposer})
 }
@@ -263,10 +297,12 @@ func (c *Cluster) Unsubscribe(ch <-chan Event) {
 func (c *Cluster) Snapshot() Snapshot {
 	c.mu.Lock()
 	s := Snapshot{
-		Height: c.height,
-		Supply: c.supply,
-		Blocks: append([]BlockInfo{}, c.recent...), // [] not null when empty, for the UI
-		Halts:  append([]string{}, c.halts...),
+		Genesis: c.genesis,
+		Height:  c.height,
+		Supply:  c.supply,
+		Blocks:  append([]BlockInfo{}, c.recent...), // [] not null when empty, for the UI
+		Txs:     append([]TxInfo{}, c.txs...),
+		Halts:   append([]string{}, c.halts...),
 	}
 	proposed := make(map[string]int, len(c.proposed))
 	for k, v := range c.proposed {

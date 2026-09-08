@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"math"
 	"math/rand"
 	"net"
 	"net/http"
@@ -130,10 +131,10 @@ func newServer(n int) *server {
 	alloc := map[string]uint64{
 		s.faucet.addr: 1_000_000_000 * chain.BlockReward, // effectively unlimited
 	}
-	for _, name := range []string{"treasury", "alice", "bob", "carol"} {
+	for name, dyl := range demoAccounts {
 		w := newWallet()
 		s.accounts[name] = w
-		alloc[w.addr] = 1_000 * chain.BlockReward
+		alloc[w.addr] = dyl * chain.BlockReward // BlockReward is exactly one DYL
 	}
 
 	set := chain.NewValidatorSet(chain.GenerateValidators(n)...)
@@ -231,11 +232,26 @@ func clientIP(r *http.Request) string {
 
 // drive submits a small transfer between two random demo accounts on a
 // timer, so blocks are not always empty.
+// demoAccounts are the server-held wallets that generate background
+// traffic, with their genesis balance in DYL. The treasury and the exchange
+// are the whales; the rest are people.
+var demoAccounts = map[string]uint64{
+	"treasury": 1_000_000,
+	"exchange": 250_000,
+	"alice":    4_200,
+	"bob":      1_850,
+	"carol":    3_100,
+	"dave":     960,
+}
+
+// people are the demo accounts that send everyday transfers.
+var people = []string{"alice", "bob", "carol", "dave"}
+
+// drive submits background traffic so the chain is never idle. Each tick
+// it picks a pattern: mostly small transfers between people, sometimes an
+// exchange withdrawal, a treasury grant to a validator, or a burst of
+// several transfers at once so blocks vary in size.
 func (s *server) drive(ctx context.Context, every time.Duration) {
-	names := make([]string, 0, len(s.accounts))
-	for name := range s.accounts {
-		names = append(names, name)
-	}
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -243,17 +259,74 @@ func (s *server) drive(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			from := s.accounts[names[rand.Intn(len(names))]]
-			to := s.accounts[names[rand.Intn(len(names))]]
-			if from.addr == to.addr {
-				continue
-			}
-			tx, rollback := s.signFrom(from, to.addr, uint64(1+rand.Intn(50))*chain.BlockReward/100)
-			if s.cluster.Submit(tx) != nil {
-				rollback()
+			switch r := rand.Intn(100); {
+			case r < 55:
+				s.submitDemo(s.randomPerson(""), s.randomPerson, personalAmount())
+			case r < 70:
+				s.submitDemo("exchange", s.randomPerson, dyl(10+rand.Float64()*490))
+			case r < 80:
+				s.submitDemo("treasury", s.randomValidator, dyl(25+rand.Float64()*75))
+			case r < 88:
+				s.submitDemo(s.randomPerson(""), func(string) string { return s.accounts["exchange"].addr }, personalAmount())
+			default:
+				for i, n := 0, 3+rand.Intn(4); i < n; i++ {
+					s.submitDemo(s.randomPerson(""), s.randomPerson, personalAmount())
+				}
 			}
 		}
 	}
+}
+
+// submitDemo signs a transfer from a named account to whatever pick
+// returns (given the sender's address, so it can avoid a self-send) and
+// submits it, rolling the nonce back if the mempool refuses it.
+func (s *server) submitDemo(from string, pick func(exclude string) string, amount uint64) {
+	w := s.accounts[from]
+	to := pick(w.addr)
+	if to == "" || to == w.addr {
+		return
+	}
+	tx, rollback := s.signFrom(w, to, amount)
+	if s.cluster.Submit(tx) != nil {
+		rollback()
+	}
+}
+
+// randomPerson returns a person's name (when exclude is empty) or address
+// (otherwise, never the excluded one).
+func (s *server) randomPerson(exclude string) string {
+	if exclude == "" {
+		return people[rand.Intn(len(people))]
+	}
+	for {
+		if a := s.accounts[people[rand.Intn(len(people))]].addr; a != exclude {
+			return a
+		}
+	}
+}
+
+// randomValidator returns a random unslashed validator's address.
+func (s *server) randomValidator(string) string {
+	vs := s.cluster.Snapshot().Validators
+	for range 8 {
+		if v := vs[rand.Intn(len(vs))]; !v.Slashed {
+			return v.Address
+		}
+	}
+	return ""
+}
+
+// personalAmount is a log-normal-ish everyday transfer, mostly well under
+// a DYL, occasionally a few, rarely tens, capped at 200 DYL.
+func personalAmount() uint64 {
+	v := 0.35 * math.Exp(rand.NormFloat64()*1.2)
+	return dyl(math.Min(math.Max(v, 0.01), 200))
+}
+
+// dyl converts a DYL amount to base units, rounded to a hundredth of a DYL
+// so the feed reads like money rather than noise.
+func dyl(amount float64) uint64 {
+	return uint64(math.Round(amount*100)) * (chain.BlockReward / 100)
 }
 
 // signFrom builds and signs a transfer from a server-held wallet, reserving
@@ -385,9 +458,11 @@ func (s *server) handleState(w http.ResponseWriter, _ *http.Request) {
 	sort.Slice(seen, func(i, j int) bool { return seen[i].Address < seen[j].Address })
 
 	writeJSON(w, map[string]any{
+		"genesis":    snap.Genesis,
 		"height":     snap.Height,
 		"supply":     snap.Supply,
 		"blocks":     snap.Blocks,
+		"txs":        snap.Txs,
 		"validators": snap.Validators,
 		"halts":      snap.Halts,
 		"accounts":   accounts,

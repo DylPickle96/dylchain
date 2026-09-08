@@ -1,30 +1,32 @@
-import type { ClusterEvent, State } from '../api'
-import { shortAddr } from '../api'
+import type { ClusterEvent, Name } from '../api'
+import { Icon } from './bits'
 
 export function EventLog({
   events,
-  state,
+  names,
 }: {
   events: ClusterEvent[]
-  state: State | null
+  names: (addr: string) => Name
 }) {
-  const name = (addr: string) =>
-    state?.validators.find((v) => v.address === addr)?.moniker ?? shortAddr(addr)
+  const notable = events.filter((e) => e.kind !== 'block').length
 
   return (
-    <section className="panel span">
+    <section className="panel eventlog">
       <header>
-        <span>Events</span>
-        <span className="faint">{events.length}</span>
+        <span className="title">Live events</span>
+        <span className="faint">{notable > 0 ? `${notable} notable` : 'streamed over SSE'}</span>
       </header>
       {events.length === 0 ? (
         <div className="empty">no events yet</div>
       ) : (
-        <div className="events">
+        <div className="events scroll tall">
           {events.map((e, i) => (
             <div className={`row ${e.kind}`} key={`${e.height}-${e.kind}-${i}`}>
-              <span className="at">{clock(e.received)}</span>
-              <span className="what">{describe(e, name)}</span>
+              <span className="at mono">{clock(e.received)}</span>
+              <span className="ico">
+                <Icon name={e.kind === 'block' ? 'block' : e.kind === 'slash' ? 'bolt' : 'alert'} size={13} />
+              </span>
+              <span className="what">{describe(e, names)}</span>
             </div>
           ))}
         </div>
@@ -33,14 +35,16 @@ export function EventLog({
   )
 }
 
-function describe(e: ClusterEvent, name: (a: string) => string): string {
+function describe(e: ClusterEvent, names: (a: string) => Name): string {
+  const who = names(e.validator).label
+  const h = e.height.toLocaleString('en-US')
   switch (e.kind) {
     case 'block':
-      return `block ${e.height.toLocaleString('en-US')} proposed by ${name(e.validator)}`
+      return `Block ${h} committed, proposed by ${who}`
     case 'slash':
-      return `${name(e.validator)} slashed for a double-vote at height ${e.height.toLocaleString('en-US')}`
+      return `${who} slashed: it signed two conflicting votes at block ${h}`
     case 'halt':
-      return `${name(e.validator)} halted at height ${e.height.toLocaleString('en-US')}`
+      return `${who} halted at block ${h}`
   }
 }
 

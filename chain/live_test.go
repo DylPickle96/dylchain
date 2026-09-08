@@ -239,3 +239,82 @@ func TestRecordHalt(t *testing.T) {
 		t.Error("no halt event on the stream")
 	}
 }
+
+// Snapshot carries a bounded feed of applied transactions with their hash,
+// height, and the block's time, plus each block's hash and the genesis
+// time.
+func TestSnapshotTxFeed(t *testing.T) {
+	alice := newWallet(t)
+	bob := newWallet(t)
+	cl := NewCluster(map[string]uint64{alice.addr: 1_000_000}, fourValidators(t), 0)
+
+	if g := cl.Snapshot().Genesis; g == 0 {
+		t.Fatal("snapshot genesis time is zero")
+	}
+	for i := int64(0); i < 3; i++ {
+		if err := cl.Submit(alice.send(t, bob.addr, 10, i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runUntilHeight(t, cl, 4)
+	s := cl.Snapshot()
+
+	if len(s.Txs) != 3 {
+		t.Fatalf("got %d txs in the feed, want 3", len(s.Txs))
+	}
+	seen := map[string]bool{}
+	for i, tx := range s.Txs {
+		if tx.From != alice.addr || tx.To != bob.addr || tx.Amount != 10 {
+			t.Errorf("tx %d: %+v", i, tx)
+		}
+		if len(tx.Hash) != 64 || seen[tx.Hash] {
+			t.Errorf("tx %d: bad or duplicate hash %q", i, tx.Hash)
+		}
+		seen[tx.Hash] = true
+		var blk *BlockInfo
+		for j := range s.Blocks {
+			if s.Blocks[j].Height == tx.Height {
+				blk = &s.Blocks[j]
+			}
+		}
+		if blk == nil {
+			t.Errorf("tx %d: height %d not in the recent blocks", i, tx.Height)
+		} else if blk.Time != tx.Time {
+			t.Errorf("tx %d: time %d, block time %d", i, tx.Time, blk.Time)
+		}
+	}
+	for _, b := range s.Blocks {
+		if len(b.Hash) != 64 {
+			t.Errorf("block %d: hash %q", b.Height, b.Hash)
+		}
+	}
+}
+
+// The transaction feed is bounded at recentTxs, keeping the newest.
+func TestSnapshotTxFeedBounded(t *testing.T) {
+	alice := newWallet(t)
+	bob := newWallet(t)
+	cl := NewCluster(map[string]uint64{alice.addr: 1_000_000}, fourValidators(t), 0)
+
+	n := int64(recentTxs + 5)
+	for i := int64(0); i < n; i++ {
+		if err := cl.Submit(alice.send(t, bob.addr, 1, i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runUntilHeight(t, cl, 3)
+	s := cl.Snapshot()
+
+	if len(s.Txs) != recentTxs {
+		t.Fatalf("feed holds %d, want %d", len(s.Txs), recentTxs)
+	}
+	if bal, _ := cl.Account(bob.addr); bal != uint64(n) {
+		t.Fatalf("bob has %d, want %d: not every tx applied", bal, n)
+	}
+	for i := 1; i < len(s.Txs); i++ {
+		if s.Txs[i].Height < s.Txs[i-1].Height {
+			t.Fatal("feed is not in height order")
+		}
+	}
+}

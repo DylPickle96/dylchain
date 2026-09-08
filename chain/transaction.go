@@ -53,6 +53,21 @@ const (
 	merkleNodePrefix byte = 0x01
 )
 
+// Hash is the transaction's identifier: its Merkle leaf hash, the SHA-256
+// of the leaf prefix and the transaction's JSON. It covers the signature
+// too, so it is unique per signed transaction and is exactly the leaf a
+// block's TxRoot commits to.
+func (t Transaction) Hash() []byte {
+	data, err := json.Marshal(t)
+	if err != nil {
+		panic(err) // these field types cannot produce a marshal error
+	}
+	h := sha256.New()
+	h.Write([]byte{merkleLeafPrefix})
+	h.Write(data)
+	return h.Sum(nil)
+}
+
 // merkleRoot is the Merkle root committing to a block's transactions. An
 // empty block has an all-zero root.
 func merkleRoot(txs []Transaction) []byte {
@@ -62,14 +77,7 @@ func merkleRoot(txs []Transaction) []byte {
 
 	layer := make([][]byte, len(txs))
 	for i, tx := range txs {
-		data, err := json.Marshal(tx)
-		if err != nil {
-			panic(err) // these field types cannot produce a marshal error
-		}
-		h := sha256.New()
-		h.Write([]byte{merkleLeafPrefix})
-		h.Write(data)
-		layer[i] = h.Sum(nil)
+		layer[i] = tx.Hash()
 	}
 	return walkTree(layer)[0]
 }
@@ -116,16 +124,9 @@ func merkleProof(txs []Transaction, index int) ([][]byte, error) {
 	if index < 0 || index >= len(txs) {
 		return nil, fmt.Errorf("bad index for merkleProof")
 	}
-	layer := make([][]byte, 0)
-	for _, tx := range txs {
-		data, err := json.Marshal(tx)
-		if err != nil {
-			panic(err) // these field types cannot produce a marshal error
-		}
-		h := sha256.New()
-		h.Write([]byte{merkleLeafPrefix})
-		h.Write(data)
-		layer = append(layer, h.Sum(nil))
+	layer := make([][]byte, len(txs))
+	for i, tx := range txs {
+		layer[i] = tx.Hash()
 	}
 	proofs := make([][]byte, 0)
 	for len(layer) > 1 {

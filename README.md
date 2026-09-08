@@ -48,7 +48,7 @@ web/       the explorer UI and burner wallet, React + Vite
 | `consensus.go` | votes, the in-process bus, the per-validator round loop, equivocation detection |
 | `evidence.go` | `Evidence` for a double-vote, `verifyEvidence` |
 | `cluster.go` | `Cluster`, the entry point for a consensus run |
-| `generate.go` | `GenerateValidators`, a skewed-stake set for demos and load tests |
+| `generate.go` | `GenerateValidators`, named validators on a skewed stake curve for demos and load tests |
 | `*_test.go` | tests, with shared fixtures in `testutil_test.go` |
 
 ## Model
@@ -221,12 +221,14 @@ in-memory version from letting two nodes disagree on a height.
 go run ./cmd/dyld
 ```
 
-Boots a 20-validator cluster, produces a block a second, and serves an API
-on `:8080`:
+Boots a 20-validator cluster with named validators on a skewed stake curve
+(the largest holds about 13%), produces a block a second, and keeps a set of
+demo accounts (a treasury, an exchange, and four people) trading in the
+background so the chain is never idle. It serves an API on `:8080`:
 
 | Route | |
 |-------|-|
-| `GET /state` | height, supply, recent blocks, validators, demo accounts, seen addresses |
+| `GET /state` | genesis time, height, supply, recent blocks and transactions, validators, demo accounts, seen addresses |
 | `GET /events` | Server-Sent Events: one frame per block, slash, and node halt |
 | `GET /account?address=` | balance and next nonce |
 | `POST /tx` | a signed `Transaction` as JSON |
@@ -246,14 +248,23 @@ npm run dev     # dev server on :5173, proxies the API to :8080
 npm run build   # writes web/dist for go run ./cmd/dyld to serve
 ```
 
-The page shows the block feed, the validator table with voting-power bars
-and a per-validator fault button, and an event log. It also holds a burner
-wallet: an ed25519 key pair generated in the browser and kept in
-`localStorage`. Visitors fund it from the faucet and send DYL to validators
-or to any address they paste. The chain has no value, so a plaintext key in
-the browser is an acceptable trade for zero friction. Transactions are
-signed client-side over the same byte layout `chain/transaction.go` uses,
-so the server verifies them with no special path.
+The page is a small explorer. A stat strip shows height, block time, a
+transactions-per-block sparkline, circulating supply with the minted total,
+and bonded stake. The validator table sits under a stacked voting-power bar
+with the ⅓ and ⅔ consensus thresholds marked. Open a validator to see which
+recent blocks it proposed and a button that makes it double-vote, and watch
+the slash arrive in the event log two blocks later. Block and transaction
+feeds update live, blocks expand to list their transactions, and the search
+box looks up any address or recent block height.
+
+It also holds a burner wallet: an ed25519 key pair generated in the browser
+and kept in `localStorage`. Visitors fund it from the faucet and send DYL to
+validators, demo accounts, or any address they paste, and their own
+transfers are highlighted in the feed. The chain has no value, so a
+plaintext key in the browser is an acceptable trade for zero friction.
+Transactions are signed client-side over the same byte layout
+`chain/transaction.go` uses, so the server verifies them with no special
+path.
 
 ## Running the tests
 
