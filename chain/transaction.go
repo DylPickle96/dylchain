@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 )
@@ -25,20 +26,23 @@ func (t Transaction) Sign(privateKey ed25519.PrivateKey) []byte {
 	return ed25519.Sign(privateKey, t.signableBytes())
 }
 
-// signableBytes is the deterministic serialisation the signature covers:
-// the authorised fields only, never the Signature itself.
+// signableBytes is the deterministic byte string a transaction signature
+// covers: the authorised fields concatenated, never the Signature. It is a
+// plain concatenation, not JSON, so a browser wallet can reproduce it
+// exactly with a few lines:
+//
+//	From ‖ 0x00 ‖ To ‖ 0x00 ‖ Amount (8 bytes big-endian) ‖ Nonce (8 bytes big-endian)
+//
+// The 0x00 separators keep ("ab","c") from colliding with ("a","bc").
 func (t Transaction) signableBytes() []byte {
-	toSign := Transaction{
-		From:   t.From,
-		To:     t.To,
-		Amount: t.Amount,
-		Nonce:  t.Nonce,
-	}
-	data, err := json.Marshal(toSign)
-	if err != nil {
-		panic(err) // these field types cannot produce a marshal error
-	}
-	return data
+	b := make([]byte, 0, len(t.From)+len(t.To)+18)
+	b = append(b, t.From...)
+	b = append(b, 0)
+	b = append(b, t.To...)
+	b = append(b, 0)
+	b = binary.BigEndian.AppendUint64(b, t.Amount)
+	b = binary.BigEndian.AppendUint64(b, uint64(t.Nonce))
+	return b
 }
 
 // Merkle domain-separation prefixes: leaf hashes and internal-node hashes
