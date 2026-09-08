@@ -1,9 +1,11 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
-// In dev the app calls /state, /events, /tx and so on as same-origin paths;
-// Vite forwards them to a locally running dyld. In production dyld serves
-// web/dist itself, so the same paths are already same-origin.
+// `npm run dev` sets VITE_BACKEND=http (.env.development), so the app calls
+// /state, /events, /tx as same-origin paths and Vite forwards them to a
+// local dyld. A plain `npm run build` instead bundles the chain as wasm and
+// needs no server. `npm run build:http` keeps the proxy paths for a dyld
+// that serves web/dist itself.
 export default defineConfig({
   plugins: [react()],
   server: {

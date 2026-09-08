@@ -8,6 +8,10 @@ cmd/dyld/dyld
 # web build / deps
 web/node_modules/
 web/dist/
+web/.wrangler/
+
+# built by scripts/build-wasm.sh; wasm_exec.js is committed, the binary is not
+web/public/dyl.wasm
 
 # persistent demo state (keys.json, blocks.jsonl)
 /data/

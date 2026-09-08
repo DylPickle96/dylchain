@@ -20,6 +20,9 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Go's wasm loader is a classic script that defines window.Go. It is
+         only fetched by wasm.ts when the standalone backend is in use. -->
+    <script src="/wasm_exec.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

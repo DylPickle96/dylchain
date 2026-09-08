@@ -18,6 +18,8 @@ jobs:
         run: test -z "$(gofmt -l chain cmd)" || { gofmt -l chain cmd; exit 1; }
       - run: go vet ./...
       - run: go test -race ./...
+      - name: wasm build compiles
+        run: GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/dylwasm
 
   web:
     name: Web
@@ -27,6 +29,9 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -35,4 +40,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npx tsc --noEmit
-      - run: npm run build
+      - name: build (wasm backend)
+        run: npm run build
+      - name: build (http backend)
+        run: npm run build:http

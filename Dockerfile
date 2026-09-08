@@ -1,10 +1,11 @@
-# Build the explorer.
+# Build the explorer wired to this image's own dyld over HTTP (build:http),
+# rather than the default in-page wasm build.
 FROM node:22-alpine AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
-RUN npm run build
+RUN npm run build:http
 
 # Build the server, statically linked so it runs on a bare image.
 FROM golang:1.26-alpine AS server

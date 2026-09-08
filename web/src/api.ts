@@ -157,42 +157,18 @@ export function hue(addr: string): number {
   return h % 360
 }
 
-export async function getState(signal?: AbortSignal): Promise<State> {
-  const r = await fetch('/state', { signal })
-  if (!r.ok) throw new Error(`/state ${r.status}`)
-  const s = (await r.json()) as State
-  // Tolerate an older server that does not send these yet.
-  if (!Number.isFinite(s.blockReward)) s.blockReward = UDYL
-  if (!Number.isFinite(s.faucetGrant)) s.faucetGrant = 100 * UDYL
-  return s
-}
+// ---------------------------------------------------------------------------
+// Backend: "http" talks to a dyld server on the same origin; "wasm" runs the
+// chain in the page (cmd/dylwasm). `npm run dev` picks http via
+// .env.development; a plain build defaults to wasm, so it deploys anywhere.
+// ---------------------------------------------------------------------------
 
-async function post(path: string, body: unknown): Promise<string | null> {
-  const r = await fetch(path, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (r.ok) return null
-  return (await r.text()).trim() || `HTTP ${r.status}`
-}
-
-export const postFault = (index: number) => post('/fault', { index })
-export const postFaucet = (address: string) => post('/faucet', { address })
-export const postTx = (tx: unknown) => post('/tx', tx)
+const BACKEND: 'wasm' | 'http' = import.meta.env.VITE_BACKEND === 'http' ? 'http' : 'wasm'
 
 export type AccountInfo = {
   balance: number
   nonce: number
   delegations: Record<string, number> | null // validator address -> bonded
-}
-
-export async function getAccount(address: string): Promise<AccountInfo> {
-  const r = await fetch(`/account?address=${encodeURIComponent(address)}`)
-  if (!r.ok) throw new Error(`/account ${r.status}`)
-  const a = (await r.json()) as AccountInfo
-  if (!a.delegations) a.delegations = null
-  return a
 }
 
 export type InclusionProof = {
@@ -203,16 +179,98 @@ export type InclusionProof = {
   root: string
 }
 
-export async function getProof(height: number, hash: string): Promise<InclusionProof> {
+function normaliseState(s: State): State {
+  if (!Number.isFinite(s.blockReward)) s.blockReward = UDYL
+  if (!Number.isFinite(s.faucetGrant)) s.faucetGrant = 100 * UDYL
+  return s
+}
+
+// --- http backend ----------------------------------------------------------
+
+async function httpGetState(signal?: AbortSignal): Promise<State> {
+  const r = await fetch('/state', { signal })
+  if (!r.ok) throw new Error(`/state ${r.status}`)
+  return normaliseState((await r.json()) as State)
+}
+
+async function httpPost(path: string, body: unknown): Promise<string | null> {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (r.ok) return null
+  return (await r.text()).trim() || `HTTP ${r.status}`
+}
+
+async function httpGetAccount(address: string): Promise<AccountInfo> {
+  const r = await fetch(`/account?address=${encodeURIComponent(address)}`)
+  if (!r.ok) throw new Error(`/account ${r.status}`)
+  const a = (await r.json()) as AccountInfo
+  if (!a.delegations) a.delegations = null
+  return a
+}
+
+async function httpGetProof(height: number, hash: string): Promise<InclusionProof> {
   const r = await fetch(`/proof?height=${height}&hash=${encodeURIComponent(hash)}`)
   if (!r.ok) throw new Error((await r.text()).trim() || `/proof ${r.status}`)
   return r.json()
 }
 
-// useCluster polls /state every few seconds and treats a successful poll as
-// "live". The /events stream is only a nudge to poll again immediately, so
-// updates feel instant; if it drops or the server caps it, the poll still
-// keeps the page current and a reconnect is retried in the background.
+// --- wasm backend --------------------------------------------------------
+
+function wasmErr(r: { ok?: boolean; error?: string }): string | null {
+  return r && r.error ? r.error : null
+}
+
+async function wasmGetState(): Promise<State> {
+  return normaliseState(JSON.parse(window.dylState()) as State)
+}
+
+async function wasmGetAccount(address: string): Promise<AccountInfo> {
+  const a = JSON.parse(window.dylAccount(address)) as AccountInfo
+  if (!a.delegations) a.delegations = null
+  return a
+}
+
+async function wasmGetProof(height: number, hash: string): Promise<InclusionProof> {
+  const out = window.dylProof(height, hash)
+  if (typeof out !== 'string') throw new Error(out.error || 'proof failed')
+  return JSON.parse(out) as InclusionProof
+}
+
+// --- public data access (dispatches on BACKEND) -------------------------
+
+export function getState(signal?: AbortSignal): Promise<State> {
+  return BACKEND === 'http' ? httpGetState(signal) : wasmGetState()
+}
+
+export function getAccount(address: string): Promise<AccountInfo> {
+  return BACKEND === 'http' ? httpGetAccount(address) : wasmGetAccount(address)
+}
+
+export function getProof(height: number, hash: string): Promise<InclusionProof> {
+  return BACKEND === 'http' ? httpGetProof(height, hash) : wasmGetProof(height, hash)
+}
+
+export async function postTx(tx: unknown): Promise<string | null> {
+  return BACKEND === 'http' ? httpPost('/tx', tx) : wasmErr(window.dylSubmitTx(JSON.stringify(tx)))
+}
+
+export async function postFaucet(address: string): Promise<string | null> {
+  return BACKEND === 'http' ? httpPost('/faucet', { address }) : wasmErr(window.dylFaucet(address))
+}
+
+export async function postFault(index: number): Promise<string | null> {
+  return BACKEND === 'http' ? httpPost('/fault', { index }) : wasmErr(window.dylFault(index))
+}
+
+// --- useCluster ---------------------------------------------------------
+
+// useCluster keeps a State snapshot, a rolling event log, and a "live"
+// flag. Over http it polls /state and listens on the /events SSE stream;
+// over wasm it boots the in-page chain and polls dylState() on a timer,
+// refetching immediately whenever the chain pushes an event.
 export function useCluster() {
   const [state, setState] = useState<State | null>(null)
   const [events, setEvents] = useState<ClusterEvent[]>([])
@@ -222,14 +280,12 @@ export function useCluster() {
 
   useEffect(() => {
     let stopped = false
-    let es: EventSource | null = null
-    let retry: ReturnType<typeof setTimeout> | undefined
 
     const refresh = async () => {
       if (inFlight.current) return
       inFlight.current = true
       try {
-        const s = await getState(AbortSignal.timeout(8000))
+        const s = await getState(BACKEND === 'http' ? AbortSignal.timeout(8000) : undefined)
         if (stopped) return
         setState(s)
         setError(null)
@@ -243,26 +299,46 @@ export function useCluster() {
       }
     }
 
+    const onEvent = (raw: unknown) => {
+      if (stopped) return
+      const ev = { ...(raw as object), received: Date.now() } as ClusterEvent
+      setEvents((prev) => [ev, ...prev].slice(0, 80))
+      refresh()
+    }
+
+    if (BACKEND === 'wasm') {
+      let poll: ReturnType<typeof setInterval>
+      import('./wasm').then(({ loadChain }) =>
+        loadChain((_kind, data) => onEvent(data))
+          .then(() => {
+            if (stopped) return
+            refresh()
+            poll = setInterval(refresh, 1500)
+          })
+          .catch((e) => !stopped && setError(String(e))),
+      )
+      return () => {
+        stopped = true
+        clearInterval(poll)
+      }
+    }
+
+    // http backend
+    let es: EventSource | null = null
+    let retry: ReturnType<typeof setTimeout> | undefined
     const connect = () => {
       if (stopped) return
       es = new EventSource('/events')
-      es.onopen = () => {
-        if (!stopped) refresh()
-      }
+      es.onopen = () => !stopped && refresh()
       es.onmessage = (m) => {
         if (stopped) return
         try {
-          const ev = { ...JSON.parse(m.data), received: Date.now() } as ClusterEvent
-          setEvents((prev) => [ev, ...prev].slice(0, 80))
+          onEvent(JSON.parse(m.data))
         } catch {
-          return
+          /* ignore */
         }
-        refresh()
       }
       es.onerror = () => {
-        // A transient drop: EventSource reconnects on its own. A hard close
-        // (a non-200 such as the server's viewer cap) leaves it CLOSED for
-        // good, so retry it by hand.
         if (stopped || !es || es.readyState !== EventSource.CLOSED) return
         es.close()
         es = null
@@ -270,11 +346,9 @@ export function useCluster() {
         retry = setTimeout(connect, 3000)
       }
     }
-
     refresh()
     const poll = setInterval(refresh, 4000)
     connect()
-
     return () => {
       stopped = true
       clearInterval(poll)

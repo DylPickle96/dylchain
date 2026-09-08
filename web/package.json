@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "sh ../scripts/build-wasm.sh && tsc -b && vite build",
+    "build:http": "tsc -b && VITE_BACKEND=http vite build && rm -f dist/dyl.wasm",
     "lint": "oxlint",
     "preview": "vite preview"
   },
