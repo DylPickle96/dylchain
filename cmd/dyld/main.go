@@ -504,6 +504,7 @@ func (s *server) handleState(w http.ResponseWriter, _ *http.Request) {
 		"genesis":     snap.Genesis,
 		"height":      snap.Height,
 		"supply":      snap.Supply,
+		"pending":     snap.Pending,
 		"blockReward": uint64(chain.BlockReward),
 		"faucetGrant": uint64(faucetGrant),
 		"blocks":      snap.Blocks,

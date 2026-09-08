@@ -39,7 +39,14 @@ export function StatStrip({ state }: { state: State }) {
         label="Transactions"
         value={recentTxs.toLocaleString('en-US')}
         unit={`in last ${blocks.length} blocks`}
-        sub={<Sparkline values={txsPerBlock} />}
+        sub={
+          <span className="tx-sub">
+            <Sparkline values={txsPerBlock} />
+            <span className={state.pending > 0 ? 'pending on' : 'pending'}>
+              {state.pending > 0 ? `${state.pending} waiting for a block` : 'mempool empty'}
+            </span>
+          </span>
+        }
       />
       <Stat
         label="Circulating supply"

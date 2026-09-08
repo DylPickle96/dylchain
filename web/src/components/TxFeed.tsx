@@ -20,7 +20,10 @@ export function TxFeed({
     <section className="panel txs">
       <header>
         <span className="title">Transactions</span>
-        <span className="faint">latest {txs.length}</span>
+        <span className="faint">
+          latest {txs.length}
+          {state.pending > 0 && ` · ${state.pending} in the mempool`}
+        </span>
       </header>
       {txs.length === 0 ? (
         <div className="empty">no transactions yet</div>

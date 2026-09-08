@@ -38,6 +38,7 @@ export type State = {
   genesis: number
   height: number
   supply: number
+  pending: number
   blockReward: number
   faucetGrant: number
   blocks: BlockInfo[]

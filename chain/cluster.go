@@ -91,8 +91,9 @@ type Snapshot struct {
 	Genesis    int64           `json:"genesis"` // genesis block time, unix seconds
 	Height     int64           `json:"height"`
 	Supply     uint64          `json:"supply"`
-	Blocks     []BlockInfo     `json:"blocks"` // recent, oldest first
-	Txs        []TxInfo        `json:"txs"`    // recent, oldest first
+	Pending    int             `json:"pending"` // transactions waiting in the mempool
+	Blocks     []BlockInfo     `json:"blocks"`  // recent, oldest first
+	Txs        []TxInfo        `json:"txs"`     // recent, oldest first
 	Validators []ValidatorInfo `json:"validators"`
 	Halts      []string        `json:"halts"` // nodes that stopped on an impossible state
 }
@@ -332,8 +333,10 @@ func (c *Cluster) Unsubscribe(ch <-chan Event) {
 // Snapshot returns a consistent view of the cluster: height, supply, the
 // recent blocks, and every validator's stake and status.
 func (c *Cluster) Snapshot() Snapshot {
+	pending := c.mempool.Len()
 	c.mu.Lock()
 	s := Snapshot{
+		Pending: pending,
 		Genesis: c.genesis,
 		Height:  c.height,
 		Supply:  c.supply,

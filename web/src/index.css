@@ -296,6 +296,20 @@ button:disabled {
   min-height: 18px;
 }
 
+.tx-sub {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tx-sub .pending {
+  font-variant-numeric: tabular-nums;
+}
+
+.tx-sub .pending.on {
+  color: var(--accent-strong);
+}
+
 .stat.alert {
   border-color: rgba(248, 113, 113, 0.35);
 }
