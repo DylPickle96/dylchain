@@ -115,9 +115,11 @@ function BlockRows({
                 <ul className="txlist">
                   {txs.map((t) => (
                     <li key={t.hash}>
-                      <span className="mono faint">{shortHash(t.hash)}</span>
+                      <button className="linkish mono faint" onClick={() => onLookup(t.hash)}>
+                        {shortHash(t.hash)}
+                      </button>
                       <Who addr={t.from} name={names(t.from)} size={16} onClick={onLookup} />
-                      <span className="faint">→</span>
+                      <span className="faint">{t.kind ? '·' : '→'}</span>
                       <Who addr={t.to} name={names(t.to)} size={16} onClick={onLookup} />
                       <span className="amt mono">{formatDYL(t.amount)} DYL</span>
                     </li>

@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react'
-import type { Name, State } from '../api'
-import type { AccountInfo } from '../api'
-import { formatDYL, getAccount, isAddress, shortHash } from '../api'
+import type { AccountInfo, Name, State } from '../api'
+import { formatDYL, getAccount, isAddress, isTxHash, shortHash } from '../api'
 import { Avatar, Copy, Icon, Who } from './bits'
 
 // Lookup shows what the search box found: an account with its balance and
-// recent transfers, or a block with its transactions.
+// recent transfers, a block with its transactions, or one transaction.
 export function Lookup({
   query,
   state,
@@ -19,15 +18,18 @@ export function Lookup({
   onLookup: (q: string) => void
   onClose: () => void
 }) {
-  const q = query.trim()
+  const q = query.trim().toLowerCase()
   const height = /^#?\d+$/.test(q) ? Number(q.replace('#', '')) : null
   const addr = isAddress(q) ? q : null
+  const txHash = isTxHash(q) ? q : null
+
+  const kind = addr ? 'Account' : txHash ? 'Transaction' : height !== null ? 'Block' : 'Search'
 
   return (
     <section className="panel lookup">
       <header>
         <span className="title">
-          <Icon name="search" /> {addr ? 'Account' : height !== null ? 'Block' : 'Search'}
+          <Icon name="search" /> {kind}
         </span>
         <button className="linkish" onClick={onClose}>
           <Icon name="x" /> close
@@ -36,15 +38,75 @@ export function Lookup({
       <div className="lookup-body">
         {addr ? (
           <AccountView key={addr} addr={addr} state={state} names={names} onLookup={onLookup} />
+        ) : txHash ? (
+          <TxView hash={txHash} state={state} names={names} onLookup={onLookup} />
         ) : height !== null ? (
           <BlockView height={height} state={state} names={names} onLookup={onLookup} />
         ) : (
           <div className="empty">
-            Nothing matches <span className="mono">{q}</span>. Paste a full address (dyl followed by 64 hex characters) or a block height.
+            Nothing matches <span className="mono">{q}</span>. Paste a full address (dyl and 64 hex characters), a 64-hex
+            transaction hash, or a block height.
           </div>
         )}
       </div>
     </section>
+  )
+}
+
+function TxView({
+  hash,
+  state,
+  names,
+  onLookup,
+}: {
+  hash: string
+  state: State
+  names: (addr: string) => Name
+  onLookup: (q: string) => void
+}) {
+  const tx = state.txs.find((t) => t.hash === hash)
+  if (!tx) {
+    const oldest = state.txs[0]?.height
+    return (
+      <div className="empty">
+        No transaction with that hash in the recent window
+        {oldest !== undefined ? ` (blocks ${oldest.toLocaleString('en-US')} to ${state.height.toLocaleString('en-US')})` : ''}.
+        It may still be in the mempool, or it has scrolled out of the feed.
+      </div>
+    )
+  }
+  const label = tx.kind === 'delegate' ? 'Delegate' : tx.kind === 'undelegate' ? 'Undelegate' : 'Transfer'
+  return (
+    <>
+      <div className="lookup-name">
+        {label}
+        <span className="badge kind">block {tx.height.toLocaleString('en-US')}</span>
+      </div>
+      <div className="kv">
+        <span className="k">hash</span>
+        <span className="v mono">
+          {tx.hash} <Copy text={tx.hash} />
+        </span>
+        <span className="k">{tx.kind === 'delegate' ? 'delegator' : tx.kind === 'undelegate' ? 'delegator' : 'from'}</span>
+        <span className="v">
+          <Who addr={tx.from} name={names(tx.from)} onClick={onLookup} />
+        </span>
+        <span className="k">{tx.kind ? 'validator' : 'to'}</span>
+        <span className="v">
+          <Who addr={tx.to} name={names(tx.to)} onClick={onLookup} />
+        </span>
+        <span className="k">amount</span>
+        <span className="v mono">{formatDYL(tx.amount)} DYL</span>
+        <span className="k">block</span>
+        <span className="v">
+          <button className="linkish mono" onClick={() => onLookup(String(tx.height))}>
+            {tx.height.toLocaleString('en-US')}
+          </button>
+        </span>
+        <span className="k">time</span>
+        <span className="v">{new Date(tx.time * 1000).toLocaleString()}</span>
+      </div>
+    </>
   )
 }
 
@@ -141,7 +203,9 @@ function AccountView({
             const other = out ? t.to : t.from
             return (
               <li key={t.hash}>
-                <span className="mono faint">{shortHash(t.hash)}</span>
+                <button className="linkish mono faint" onClick={() => onLookup(t.hash)}>
+                  {shortHash(t.hash)}
+                </button>
                 <span className={out ? 'dir out' : 'dir in'}>{out ? 'sent' : 'got'}</span>
                 <span className="amt mono">{formatDYL(t.amount)} DYL</span>
                 <span className="faint">{out ? 'to' : 'from'}</span>

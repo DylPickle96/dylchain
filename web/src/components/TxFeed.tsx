@@ -47,9 +47,9 @@ export function TxFeed({
                 return (
                   <tr key={t.hash} className={`${now - t.time < 6 ? 'fresh' : ''}${yours ? ' yours' : ''}`}>
                     <td>
-                      <span className="mono faint" title={t.hash}>
+                      <button className="linkish mono faint" title={t.hash} onClick={() => onLookup(t.hash)}>
                         {shortHash(t.hash)}
-                      </span>
+                      </button>
                     </td>
                     <td>
                       <Who addr={t.from} name={names(t.from)} onClick={onLookup} />

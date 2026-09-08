@@ -93,6 +93,10 @@ export function isAddress(s: string): boolean {
   return /^dyl[0-9a-f]{64}$/.test(s)
 }
 
+export function isTxHash(s: string): boolean {
+  return /^[0-9a-f]{64}$/.test(s)
+}
+
 // age renders how long ago a unix-seconds timestamp was.
 export function age(unixSeconds: number): string {
   if (!Number.isFinite(unixSeconds)) return ''

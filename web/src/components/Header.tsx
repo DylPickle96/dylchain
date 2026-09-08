@@ -32,7 +32,7 @@ export function Header({
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="address or block height"
+          placeholder="address, tx hash, or block height"
           spellCheck={false}
           aria-label="search"
         />
