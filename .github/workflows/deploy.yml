@@ -1,0 +1,35 @@
+name: Deploy
+
+# Builds the standalone (wasm) explorer with Go + Node available, then hands
+# the finished web/dist to Cloudflare. Cloudflare itself does no building.
+#
+# Needs two repo secrets: CLOUDFLARE_API_TOKEN (a token with the
+# "Workers Scripts: Edit" permission) and CLOUDFLARE_ACCOUNT_ID.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the standalone explorer
+        run: cd web && npm ci && npm run build
+      - name: Deploy to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: web
+          command: deploy
