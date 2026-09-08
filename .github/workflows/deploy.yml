@@ -32,4 +32,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: web
+          # The action defaults to wrangler 3, which predates assets-only
+          # Workers and rejects a config with no "main".
+          wranglerVersion: "4"
           command: deploy
