@@ -9,6 +9,13 @@ production use.
 The native coin is **DYL**. Balances and amounts are counts of its base
 unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 
+**[Try it: dylchain.dylanaubreysmith.workers.dev](https://dylchain.dylanaubreysmith.workers.dev/)**
+
+There is no server behind that link. The chain is compiled to WebAssembly
+and the whole validator cluster runs in your tab, so you get your own from
+block one: take some DYL from the faucet, stake it behind a validator, then
+make one double-vote and watch the others slash it.
+
 ![The dyl explorer: validator table, burner wallet, and a slash landing](docs/screenshot.png)
 
 ## Status
