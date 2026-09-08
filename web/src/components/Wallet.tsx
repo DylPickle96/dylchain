@@ -256,6 +256,10 @@ export function Wallet({
 
         <div className="stake">
           <div className="detail-label">Stake behind a validator</div>
+          <p className="stake-note">
+            Rewards are proportional to stake, so every validator pays the same rate. Pick one you trust to stay online,
+            not the one with the most.
+          </p>
           <select value={stakeTo} onChange={(e) => setStakeTo(e.target.value)} aria-label="validator">
             <option value="">Choose a validator…</option>
             {[...state.validators]

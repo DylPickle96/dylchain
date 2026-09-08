@@ -34,7 +34,9 @@ export function PowerBar({ state, highlight }: { state: State; highlight?: strin
       </div>
       <div className="powerbar-legend">
         <span>
-          Voting power by validator. Blocks commit on <b>⅔</b> of stake. Slashing more than <b>⅓</b> would stall the chain, so the fault button stops there.
+          Voting power by validator. Blocks commit on <b>⅔</b> of stake. Open a validator for the button that makes it
+          double-vote; the chain catches it and slashes its stake. Slashing past <b>⅓</b> would stall consensus, so the
+          button stops there.
         </span>
       </div>
     </div>

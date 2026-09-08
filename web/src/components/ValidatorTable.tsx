@@ -27,7 +27,7 @@ export function ValidatorTable({
     <section className="panel validators">
       <header>
         <span className="title">Validators</span>
-        <span className="faint">{state.validators.length} in the set</span>
+        <span className="faint">open one to make it double-vote</span>
       </header>
       <PowerBar state={state} highlight={open} />
       <div className="scroll">

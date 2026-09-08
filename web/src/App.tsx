@@ -5,6 +5,7 @@ import { EventLog } from './components/EventLog'
 import { Header } from './components/Header'
 import { Lookup } from './components/Lookup'
 import { StatStrip } from './components/StatStrip'
+import { Toasts } from './components/Toasts'
 import { TxFeed } from './components/TxFeed'
 import { ValidatorTable } from './components/ValidatorTable'
 import { Wallet } from './components/Wallet'
@@ -71,6 +72,8 @@ export default function App() {
           </div>
 
           <TxFeed state={state} names={names} you={wallet.address} onLookup={lookup} />
+
+          <Toasts events={events} names={names} />
         </>
       )}
 
