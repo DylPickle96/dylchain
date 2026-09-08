@@ -163,7 +163,10 @@ func (n *node) run(maxHeight int64) {
 		}
 		panic(r)
 	}()
-	for h := int64(1); maxHeight <= 0 || h <= maxHeight; h++ {
+	// Start at the height after the current tip, so a chain resumed from a
+	// block log carries on rather than trying to re-propose block 1.
+	start := n.chain.Blocks[len(n.chain.Blocks)-1].Height + 1
+	for h := start; maxHeight <= 0 || h <= maxHeight; h++ {
 		if n.ctx.Err() != nil {
 			return
 		}

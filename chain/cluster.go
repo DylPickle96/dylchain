@@ -41,6 +41,7 @@ type Cluster struct {
 	delegations map[string]map[string]uint64 // delegator -> validator -> bonded, from the last committed state
 	fullBlocks  []Block                      // recent non-empty blocks kept whole, for inclusion proofs
 	subs        []chan Event
+	onCommit    func(Block) // called once per height as blocks commit, for persistence
 }
 
 // BlockInfo is the summary of one committed block, for the Snapshot feed.
@@ -113,7 +114,30 @@ func NewCluster(alloc map[string]uint64, set *ValidatorSet, maxBlockTxs int) *Cl
 	for _, m := range set.members {
 		valBase[m.address] = m.stake
 	}
-	genesis := genesisBlock(alloc, valBase)
+	c, err := buildCluster([]Block{genesisBlock(alloc, valBase)}, set, maxBlockTxs)
+	if err != nil {
+		panic(fmt.Sprintf("cluster genesis: %v", err))
+	}
+	return c
+}
+
+// ResumeCluster rebuilds a cluster from a block log: blocks[0] is the
+// original genesis, and every later block is re-committed on each node's
+// chain, so the ledger, delegations and proposer counts pick up where the
+// log left off. Slash and heal state is not in the blocks and starts
+// clear, so a validator slashed before the restart is back in the set.
+func ResumeCluster(blocks []Block, set *ValidatorSet, maxBlockTxs int) (*Cluster, error) {
+	if len(blocks) == 0 {
+		return nil, fmt.Errorf("resume: no blocks")
+	}
+	return buildCluster(blocks, set, maxBlockTxs)
+}
+
+// buildCluster makes a cluster whose every node holds a copy of blocks:
+// blocks[0] as genesis, the rest replayed through CommitBlock. The live
+// view is seeded from the tip so Snapshot and Account work immediately.
+func buildCluster(blocks []Block, set *ValidatorSet, maxBlockTxs int) (*Cluster, error) {
+	genesis := blocks[0]
 	mempool := NewMempool()
 	b := newBus(len(set.members))
 
@@ -127,8 +151,15 @@ func NewCluster(alloc map[string]uint64, set *ValidatorSet, maxBlockTxs int) *Cl
 	for i, v := range set.members {
 		chain, err := newChainFromGenesis(genesis)
 		if err != nil {
-			panic(fmt.Sprintf("cluster genesis: %v", err))
+			return nil, err
 		}
+		for _, blk := range blocks[1:] {
+			if err := chain.CommitBlock(blk); err != nil {
+				return nil, fmt.Errorf("replay block %d: %w", blk.Height, err)
+			}
+		}
+		el := newElection(set)
+		el.syncDelegations(chain.state)
 		c.nodes = append(c.nodes, &node{
 			self:         v,
 			set:          set,
@@ -143,17 +174,69 @@ func NewCluster(alloc map[string]uint64, set *ValidatorSet, maxBlockTxs int) *Cl
 			slashed:      make(map[string]bool),
 			pendingSlash: make(map[string]int64),
 			pendingHeal:  make(map[string]int64),
-			election:     newElection(set),
+			election:     el,
 		})
 	}
 
-	// Seed the live view from genesis so Account works before the first block.
-	gs := c.nodes[0].chain.state
-	c.balances = gs.Balances
-	c.nonces = gs.Nonces
-	c.supply = gs.Supply()
+	c.seedLiveView(c.nodes[0].chain)
+	return c, nil
+}
 
-	return c
+// seedLiveView populates the Snapshot fields from a replayed chain, so a
+// resumed cluster answers correctly before it commits a new block.
+func (c *Cluster) seedLiveView(ch *Chain) {
+	st := ch.state
+	c.balances = st.Balances
+	c.nonces = st.Nonces
+	c.delegations = st.Delegations
+	c.supply = st.Supply()
+	if len(ch.Blocks) == 0 {
+		return
+	}
+	c.height = ch.Blocks[len(ch.Blocks)-1].Height
+
+	for _, blk := range ch.Blocks[1:] {
+		c.proposed[blk.Proposer]++
+		c.recent = append(c.recent, BlockInfo{
+			Height:   blk.Height,
+			Hash:     hex.EncodeToString(blk.Hash()),
+			Proposer: blk.Proposer,
+			Txs:      len(blk.Transactions),
+			Time:     blk.CreatedAt,
+		})
+		for _, tx := range blk.Transactions {
+			c.txs = append(c.txs, TxInfo{
+				Hash: hex.EncodeToString(tx.Hash()), Height: blk.Height, Kind: tx.Kind,
+				From: tx.From, To: tx.To, Amount: tx.Amount, Time: blk.CreatedAt,
+			})
+		}
+		if len(blk.Transactions) > 0 {
+			c.fullBlocks = append(c.fullBlocks, blk)
+		}
+	}
+	if len(c.recent) > recentBlocks {
+		c.recent = append([]BlockInfo(nil), c.recent[len(c.recent)-recentBlocks:]...)
+	}
+	if len(c.txs) > recentTxs {
+		c.txs = append([]TxInfo(nil), c.txs[len(c.txs)-recentTxs:]...)
+	}
+	if len(c.fullBlocks) > recentTxs {
+		c.fullBlocks = append([]Block(nil), c.fullBlocks[len(c.fullBlocks)-recentTxs:]...)
+	}
+}
+
+// OnCommit registers fn to be called once per height, in order, with each
+// block as it commits. A persistent server appends the block to its log
+// here. Call it before the run starts; fn runs on the committing node's
+// goroutine, so it must be quick.
+func (c *Cluster) OnCommit(fn func(Block)) {
+	c.onCommit = fn
+}
+
+// GenesisBlock is the cluster's height-zero block, for a server that wants
+// to write it as the first line of a fresh log.
+func (c *Cluster) GenesisBlock() Block {
+	return c.nodes[0].chain.Blocks[0]
 }
 
 // Submit validates a transaction and adds it to the shared mempool. It
@@ -270,6 +353,9 @@ func (c *Cluster) recordBlock(b Block, st State) {
 	}
 	if len(c.txs) > recentTxs {
 		c.txs = append([]TxInfo(nil), c.txs[len(c.txs)-recentTxs:]...)
+	}
+	if c.onCommit != nil {
+		c.onCommit(b)
 	}
 	c.emit(Event{Kind: "block", Height: b.Height, Validator: b.Proposer})
 }

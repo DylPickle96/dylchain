@@ -400,3 +400,62 @@ func readFirstEvent(t *testing.T, url string) <-chan string {
 	}()
 	return out
 }
+
+// A server built with -data writes a block log and, restarted against the
+// same directory, resumes the chain from it rather than starting fresh.
+func TestPersistResume(t *testing.T) {
+	dir := t.TempDir()
+
+	s1 := buildServer(4, dir)
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	go s1.cluster.RunContext(ctx1)
+	go s1.drive(ctx1, 30*time.Millisecond)
+
+	ts1 := httptest.NewServer(s1.routes())
+	waitFor(t, 5*time.Second, func() bool {
+		var st struct {
+			Height int64 `json:"height"`
+		}
+		getJSON(t, ts1.URL+"/state", &st)
+		return st.Height >= 8
+	}, "first run produced no blocks")
+
+	var before struct {
+		Height   int64 `json:"height"`
+		Accounts []struct {
+			Name    string `json:"name"`
+			Balance uint64 `json:"balance"`
+		} `json:"accounts"`
+	}
+	getJSON(t, ts1.URL+"/state", &before)
+	cancel1()
+	ts1.Close()
+	// give the run loop a moment to unwind and flush the last block
+	time.Sleep(100 * time.Millisecond)
+
+	s2 := buildServer(4, dir)
+	got := s2.cluster.Snapshot().Height
+	if got < before.Height {
+		t.Fatalf("resumed at height %d, first run reached %d", got, before.Height)
+	}
+	if s2.faucet.addr != s1.faucet.addr {
+		t.Error("faucet address changed across restart")
+	}
+
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	t.Cleanup(cancel2)
+	go s2.cluster.RunContext(ctx2)
+	ts2 := httptest.NewServer(s2.routes())
+	t.Cleanup(ts2.Close)
+	waitFor(t, 5*time.Second, func() bool {
+		var st struct {
+			Height int64    `json:"height"`
+			Halts  []string `json:"halts"`
+		}
+		getJSON(t, ts2.URL+"/state", &st)
+		if len(st.Halts) != 0 {
+			t.Fatalf("halts after resume: %v", st.Halts)
+		}
+		return st.Height > got
+	}, "resumed chain did not advance")
+}

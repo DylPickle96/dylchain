@@ -39,10 +39,11 @@ func main() {
 		blockTime  = flag.Duration("block-time", time.Second, "minimum time between blocks")
 		txEvery    = flag.Duration("tx-every", 2*time.Second, "how often the driver submits a transaction")
 		healAfter  = flag.Int64("heal-after", healDelay, "heights after a slash to restore a validator; 0 keeps it permanent")
+		dataDir    = flag.String("data", "", "directory for keys and an append-only block log; empty means in-memory only")
 	)
 	flag.Parse()
 
-	srv := newServer(*validators)
+	srv := buildServer(*validators, *dataDir)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -104,6 +105,7 @@ type server struct {
 	cluster  *chain.Cluster
 	faucet   wallet
 	accounts map[string]wallet // name -> wallet, the demo recipients
+	log      *blockLog         // nil unless -data is set
 	writes   *ipLimiters       // per-IP rate limit for /tx, /faucet, /fault
 	reads    *ipLimiters       // looser per-IP rate limit for /state, /account
 	viewers  atomic.Int64      // live /events connections in total
@@ -127,12 +129,20 @@ type server struct {
 // watch the slash land, short enough that an unattended demo heals itself.
 const healDelay = 120
 
+// newServer builds an in-memory server: fresh random keys, nothing on disk.
 func newServer(n int) *server {
+	return buildServer(n, "")
+}
+
+// buildServer builds the server. With dataDir set it keeps keys in
+// <dir>/keys.json and an append-only block log in <dir>/blocks.jsonl, and
+// resumes the chain from that log on restart; the file's validator count
+// then wins over n.
+func buildServer(n int, dataDir string) *server {
 	if n < 4 {
 		n = 4
 	}
 	s := &server{
-		faucet:      newWallet(),
 		accounts:    map[string]wallet{},
 		writes:      newIPLimiters(5, 20, 4096),  // 5/s, burst 20, per IP; 4096 IPs tracked
 		reads:       newIPLimiters(30, 60, 4096), // looser, for the polled read endpoints
@@ -142,23 +152,64 @@ func newServer(n int) *server {
 		viewersByIP: map[string]int{},
 	}
 
+	var validatorSeeds [][]byte
+	if dataDir != "" {
+		keys := loadOrCreateKeys(dataDir, n)
+		n = len(keys.Validators)
+		s.faucet = walletFromSeedHex(keys.Faucet)
+		for name := range demoAccounts {
+			s.accounts[name] = walletFromSeedHex(keys.Accounts[name])
+		}
+		validatorSeeds = seedBytes(keys.Validators)
+	} else {
+		s.faucet = newWallet()
+		for name := range demoAccounts {
+			s.accounts[name] = newWallet()
+		}
+	}
+
 	alloc := map[string]uint64{
 		s.faucet.addr: 1_000_000_000 * chain.BaseUnitsPerCoin, // effectively unlimited
 	}
 	for name, coins := range demoAccounts {
-		w := newWallet()
-		s.accounts[name] = w
-		alloc[w.addr] = coins * chain.BaseUnitsPerCoin
+		alloc[s.accounts[name].addr] = coins * chain.BaseUnitsPerCoin
 	}
 
-	set := chain.NewValidatorSet(chain.GenerateValidators(n)...)
-	s.cluster = chain.NewCluster(alloc, set, maxBlockTxs)
+	var validators []chain.Validator
+	if validatorSeeds != nil {
+		validators = chain.ValidatorsFromSeeds(validatorSeeds)
+	} else {
+		validators = chain.GenerateValidators(n)
+	}
+	set := chain.NewValidatorSet(validators...)
 
-	genesis := s.cluster.Snapshot() // stakes here are pre-slash originals
+	if dataDir != "" {
+		s.log = openBlockLog(dataDir)
+		if blocks := s.log.read(); len(blocks) > 0 {
+			if _, ok := blocks[0].Alloc[s.faucet.addr]; !ok {
+				log.Fatalf("block log genesis does not match keys.json (faucet address absent from Alloc)")
+			}
+			cl, err := chain.ResumeCluster(blocks, set, maxBlockTxs)
+			if err != nil {
+				log.Fatalf("resume from block log: %v", err)
+			}
+			s.cluster = cl
+			log.Printf("resumed from %s at height %d", dataDir, cl.Snapshot().Height)
+		} else {
+			s.cluster = chain.NewCluster(alloc, set, maxBlockTxs)
+			s.log.append(s.cluster.GenesisBlock())
+		}
+		s.cluster.OnCommit(s.log.append)
+	} else {
+		s.cluster = chain.NewCluster(alloc, set, maxBlockTxs)
+	}
+
+	genesis := s.cluster.Snapshot()
 	s.origStake = make([]uint64, len(genesis.Validators))
 	for i, v := range genesis.Validators {
-		s.origStake[i] = v.Stake
-		s.origTotal += v.Stake
+		self := v.Stake - v.Delegated // genesis self-stake, even after a resume folded delegations in
+		s.origStake[i] = self
+		s.origTotal += self
 	}
 	return s
 }

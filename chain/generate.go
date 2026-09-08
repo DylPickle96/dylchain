@@ -42,13 +42,24 @@ const (
 // stake order agree. It is for demos and load tests, where hand-building a
 // large set is impractical.
 func GenerateValidators(n int) []Validator {
-	out := make([]Validator, n)
-	for i := 0; i < n; i++ {
+	seeds := make([][]byte, n)
+	for i := range seeds {
 		_, priv, err := ed25519.GenerateKey(nil)
 		if err != nil {
 			panic(err) // crypto/rand failure
 		}
-		v := NewValidator(priv, generatedStake(i))
+		seeds[i] = priv.Seed()
+	}
+	return ValidatorsFromSeeds(seeds)
+}
+
+// ValidatorsFromSeeds builds the same skewed, named set as GenerateValidators
+// but from fixed 32-byte ed25519 seeds, so a restarted process keeps the
+// same validator identities. Rank i takes seeds[i].
+func ValidatorsFromSeeds(seeds [][]byte) []Validator {
+	out := make([]Validator, len(seeds))
+	for i, seed := range seeds {
+		v := NewValidator(ed25519.NewKeyFromSeed(seed), generatedStake(i))
 		if i < len(monikers) {
 			v.moniker = monikers[i]
 		} else {

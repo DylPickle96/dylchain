@@ -314,3 +314,63 @@ func TestClusterLargeWithFault(t *testing.T) {
 		}
 	}
 }
+
+// A cluster rebuilt from a block log carries on: the ledger, the height and
+// the proposer counts match the log, the replayed chain validates, and the
+// resumed cluster keeps committing new blocks with no halts.
+func TestResumeCluster(t *testing.T) {
+	seeds := make([][]byte, 4)
+	for i := range seeds {
+		seeds[i] = newWallet(t).priv.Seed()
+	}
+	mkSet := func() *ValidatorSet { return NewValidatorSet(ValidatorsFromSeeds(seeds)...) }
+
+	alice := newWallet(t)
+	bob := newWallet(t)
+	cl := NewCluster(map[string]uint64{alice.addr: 1_000_000}, mkSet(), 0)
+	if err := cl.Submit(alice.send(t, bob.addr, 500, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Submit(alice.delegate(t, mkSet().members[1].address, 1000, 1)); err != nil {
+		t.Fatal(err)
+	}
+	cl.Run(12)
+
+	wantHeight := cl.Snapshot().Height
+	wantAlice, _ := cl.Account(alice.addr)
+	wantBob, _ := cl.Account(bob.addr)
+	blocks := append([]Block(nil), cl.Chain(0).Blocks...)
+
+	cl2, err := ResumeCluster(blocks, mkSet(), 0)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if got := cl2.Snapshot().Height; got != wantHeight {
+		t.Fatalf("resumed height %d, want %d", got, wantHeight)
+	}
+	if got, _ := cl2.Account(alice.addr); got != wantAlice {
+		t.Errorf("resumed alice balance %d, want %d", got, wantAlice)
+	}
+	if got, _ := cl2.Account(bob.addr); got != wantBob {
+		t.Errorf("resumed bob balance %d, want %d", got, wantBob)
+	}
+	if got := cl2.Delegations(alice.addr)[mkSet().members[1].address]; got != 1000 {
+		t.Errorf("resumed delegation %d, want 1000", got)
+	}
+	if err := cl2.Chain(0).Validate(); err != nil {
+		t.Errorf("resumed chain does not validate: %v", err)
+	}
+
+	cl2.Run(wantHeight + 6)
+	if got := cl2.Snapshot().Height; got != wantHeight+6 {
+		t.Fatalf("resume then run: height %d, want %d", got, wantHeight+6)
+	}
+	if h := cl2.Snapshot().Halts; len(h) != 0 {
+		t.Errorf("halts after resuming: %v", h)
+	}
+	for i := 0; i < cl2.Size(); i++ {
+		if err := cl2.Chain(i).Validate(); err != nil {
+			t.Errorf("resumed node %d does not validate: %v", i, err)
+		}
+	}
+}

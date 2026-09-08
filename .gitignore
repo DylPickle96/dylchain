@@ -8,3 +8,6 @@ cmd/dyld/dyld
 # web build / deps
 web/node_modules/
 web/dist/
+
+# persistent demo state (keys.json, blocks.jsonl)
+/data/
