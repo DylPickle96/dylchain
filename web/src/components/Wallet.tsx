@@ -75,7 +75,11 @@ export function Wallet({
     setMsg(null)
     const err = await postFaucet(wallet.address)
     setBusy(false)
-    setMsg(err ? { text: err, kind: 'err' } : { text: '100 DYL on the way. It lands in the next block or two.', kind: 'ok' })
+    setMsg(
+      err
+        ? { text: err, kind: 'err' }
+        : { text: `${formatDYL(state.faucetGrant)} DYL on the way. It lands in the next block or two.`, kind: 'ok' },
+    )
     if (!err) setTimeout(refresh, 1500)
   }
 
@@ -149,7 +153,7 @@ export function Wallet({
 
         <button className="btn" onClick={faucet} disabled={busy}>
           <Icon name="bolt" />
-          Get 100 DYL from the faucet
+          Get {formatDYL(state.faucetGrant)} DYL from the faucet
         </button>
 
         <div className="send">

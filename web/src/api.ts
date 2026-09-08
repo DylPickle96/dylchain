@@ -37,6 +37,7 @@ export type State = {
   height: number
   supply: number
   blockReward: number
+  faucetGrant: number
   blocks: BlockInfo[]
   txs: TxInfo[]
   validators: Validator[]

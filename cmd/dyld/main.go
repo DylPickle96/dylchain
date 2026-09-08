@@ -94,7 +94,8 @@ const (
 	maxSeen           = 500              // addresses kept in the seen list
 
 	// faucetGrant is what POST /faucet sends a visitor, per 30s per address.
-	faucetGrant = 100 * chain.BaseUnitsPerCoin
+	// Enough to make a delegation a visible slice of a validator.
+	faucetGrant = 5_000 * chain.BaseUnitsPerCoin
 )
 
 type server struct {
@@ -471,6 +472,7 @@ func (s *server) handleState(w http.ResponseWriter, _ *http.Request) {
 		"height":      snap.Height,
 		"supply":      snap.Supply,
 		"blockReward": uint64(chain.BlockReward),
+		"faucetGrant": uint64(faucetGrant),
 		"blocks":      snap.Blocks,
 		"txs":         snap.Txs,
 		"validators":  snap.Validators,

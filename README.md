@@ -234,9 +234,10 @@ go run ./cmd/dyld
 ```
 
 Boots a 20-validator cluster with named validators on a skewed stake curve
-(the largest holds about 13%), produces a block a second, and keeps a set of
-demo accounts (a treasury, an exchange, and four people) trading in the
-background so the chain is never idle. It serves an API on `:8080`:
+(the largest holds about 13%, the set bonds about 1M DYL in total), produces
+a block a second, and keeps a set of demo accounts (a treasury, an exchange,
+and four people) trading in the background so the chain is never idle. It
+serves an API on `:8080`:
 
 | Route | |
 |-------|-|

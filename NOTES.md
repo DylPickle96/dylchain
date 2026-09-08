@@ -167,6 +167,16 @@ server's genesis alloc, the traffic driver's `dyl()` helper, and
 scaled 100x. `/state` publishes `blockReward` so the UI computes minted
 supply instead of assuming one coin per block.
 
+Alongside that: `topStake` dropped from 2.4M to 130K DYL so the 20-validator
+demo set bonds about 1M total, near the circulating supply, instead of
+18.5M dwarfing it. `floorStake` dropped 5,000 to 300 to keep the load-test
+tail's shape. The faucet grant went 100 to 5,000 DYL, so a delegation is a
+few percent of a validator and pays a few DYL per block it proposes,
+roughly 30 DYL a minute at the top of the set. The curve's shape, ratio
+and jitter are unchanged, only the scale, so `top holds ~13%` still holds.
+`/state` also publishes `faucetGrant` so the wallet's button text and
+confirmation are not hardcoded.
+
 The proposal 46 question becomes concrete here: `BlockReward` per block vs
 the size of a PSE release. If minting outruns the release the pause is
 cosmetic. The toy just picks a round number and notes the tension.

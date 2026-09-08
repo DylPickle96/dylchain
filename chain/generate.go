@@ -26,10 +26,13 @@ var monikers = []string{
 }
 
 const (
-	// topStake is rank 0's stake in udyl: 2.4 million DYL.
-	topStake = 2_400_000 * BaseUnitsPerCoin
-	// floorStake is the smallest generated stake: 5,000 DYL.
-	floorStake = 5_000 * BaseUnitsPerCoin
+	// topStake is rank 0's stake: 130,000 DYL. The 20-validator demo set
+	// bonds about 1,000,000 DYL in total, roughly the circulating supply,
+	// so a faucet-sized delegation is a visible fraction of a validator.
+	topStake = 130_000 * BaseUnitsPerCoin
+	// floorStake is the smallest generated stake: 300 DYL. It only bites
+	// far down a large load-test set; the demo's 20 never reach it.
+	floorStake = 300 * BaseUnitsPerCoin
 )
 
 // GenerateValidators makes n validators with fresh keys, a named moniker,
