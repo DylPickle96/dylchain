@@ -1,8 +1,8 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Compiles cmd/dylwasm to web/public/, so `vite build` copies dyl.wasm and
 # its loader into dist/ verbatim. Run before `npm run build` for the
-# standalone (no backend) deployment.
-set -euo pipefail
+# standalone (no backend) deployment. POSIX sh: npm runs it with plain sh.
+set -eu
 cd "$(dirname "$0")/.."
 
 out=web/public
