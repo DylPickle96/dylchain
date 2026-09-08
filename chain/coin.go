@@ -18,22 +18,28 @@ const (
 	// DisplayDenom.
 	Precision = 6
 
-	// baseUnitsPerCoin is 10^Precision. Kept as a literal and checked
-	// against Precision in the tests.
-	baseUnitsPerCoin = 1_000_000
+	// BaseUnitsPerCoin is 10^Precision, the number of BaseDenom in one
+	// DisplayDenom. Use it to write an amount in whole coins. Kept as a
+	// literal and checked against Precision in the tests.
+	BaseUnitsPerCoin = 1_000_000
 
 	// BlockReward is the amount minted to a block's proposer when the block
-	// is applied, in BaseDenom. One DYL per block. Genesis and AddBlock
-	// blocks carry no proposer and mint nothing.
-	BlockReward = 1 * baseUnitsPerCoin
+	// is applied, in BaseDenom. Genesis and AddBlock blocks carry no
+	// proposer and mint nothing.
+	//
+	// It is deliberately generous. This chain has no value and the demo is
+	// more interesting when supply visibly moves and a delegator's share of
+	// a block is large enough to watch. Nothing here is a claim about a
+	// sensible issuance schedule.
+	BlockReward = 100 * BaseUnitsPerCoin
 )
 
 // FormatAmount renders a base-unit amount as a DisplayDenom string, e.g.
 // 12_500_000 becomes "12.5 DYL". Trailing zeros in the fraction are
 // trimmed, and a whole amount omits the fraction entirely.
 func FormatAmount(base uint64) string {
-	whole := base / baseUnitsPerCoin
-	frac := base % baseUnitsPerCoin
+	whole := base / BaseUnitsPerCoin
+	frac := base % BaseUnitsPerCoin
 	if frac == 0 {
 		return fmt.Sprintf("%d %s", whole, DisplayDenom)
 	}

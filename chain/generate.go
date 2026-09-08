@@ -27,9 +27,9 @@ var monikers = []string{
 
 const (
 	// topStake is rank 0's stake in udyl: 2.4 million DYL.
-	topStake = 2_400_000 * baseUnitsPerCoin
+	topStake = 2_400_000 * BaseUnitsPerCoin
 	// floorStake is the smallest generated stake: 5,000 DYL.
-	floorStake = 5_000 * baseUnitsPerCoin
+	floorStake = 5_000 * BaseUnitsPerCoin
 )
 
 // GenerateValidators makes n validators with fresh keys, a named moniker,
@@ -73,5 +73,5 @@ func generatedStake(rank int) uint64 {
 		return floorStake
 	}
 	// round to whole DYL so the display is tidy
-	return uint64(stake/baseUnitsPerCoin) * baseUnitsPerCoin
+	return uint64(stake/BaseUnitsPerCoin) * BaseUnitsPerCoin
 }

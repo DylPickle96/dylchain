@@ -144,8 +144,10 @@ cross between nodes.
    thirds of total stake** are in (`3*accepted > 2*total`), commit. That
    commit is final: no fork choice, no reversion.
 
-Applying a committed block mints `BlockReward` to its proposer, so total
-supply grows by one reward per height. It happens inside `Apply`, keyed off
+Applying a committed block mints `BlockReward` (100 DYL) to its proposer,
+so total supply grows by one reward per height. The figure is deliberately
+generous, not a claim about sensible issuance: the coin has no value and
+the demo reads better when supply moves. It happens inside `Apply`, keyed off
 the block's `Proposer`, so `ReplayBlocks` and `Validate` reproduce it.
 `State.Supply()` is the running total (sum of balances, nothing is burned).
 

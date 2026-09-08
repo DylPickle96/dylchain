@@ -36,6 +36,7 @@ export type State = {
   genesis: number
   height: number
   supply: number
+  blockReward: number
   blocks: BlockInfo[]
   txs: TxInfo[]
   validators: Validator[]

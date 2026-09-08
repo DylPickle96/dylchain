@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import type { State } from '../api'
-import { UDYL, compactDYL, duration, formatDYL, useTick } from '../api'
+import { compactDYL, duration, useTick } from '../api'
 import { Sparkline } from './bits'
 
 export function StatStrip({ state }: { state: State }) {
@@ -13,7 +13,7 @@ export function StatStrip({ state }: { state: State }) {
   // it to show the supply that actually circulates.
   const faucet = state.accounts.find((a) => a.name === 'faucet')?.balance ?? 0
   const circulating = Math.max(0, state.supply - faucet)
-  const minted = state.height * UDYL
+  const minted = state.height * state.blockReward
 
   const bonded = state.validators.reduce((s, v) => s + v.stake, 0)
   const top = Math.max(0, ...state.validators.map((v) => v.votingPower))
@@ -45,7 +45,7 @@ export function StatStrip({ state }: { state: State }) {
         label="Circulating supply"
         value={compactDYL(circulating)}
         unit="DYL"
-        sub={`${formatDYL(minted)} DYL minted as block rewards`}
+        sub={`${compactDYL(minted)} DYL minted as block rewards`}
       />
       <Stat
         label="Bonded stake"

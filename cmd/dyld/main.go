@@ -92,6 +92,9 @@ const (
 	maxViewersPerIP   = 16               // /events streams from one address (NAT, a proxy, or dev churn share one)
 	streamMaxLifetime = 30 * time.Minute // then the /events connection is closed
 	maxSeen           = 500              // addresses kept in the seen list
+
+	// faucetGrant is what POST /faucet sends a visitor, per 30s per address.
+	faucetGrant = 100 * chain.BaseUnitsPerCoin
 )
 
 type server struct {
@@ -137,12 +140,12 @@ func newServer(n int) *server {
 	}
 
 	alloc := map[string]uint64{
-		s.faucet.addr: 1_000_000_000 * chain.BlockReward, // effectively unlimited
+		s.faucet.addr: 1_000_000_000 * chain.BaseUnitsPerCoin, // effectively unlimited
 	}
-	for name, dyl := range demoAccounts {
+	for name, coins := range demoAccounts {
 		w := newWallet()
 		s.accounts[name] = w
-		alloc[w.addr] = dyl * chain.BlockReward // BlockReward is exactly one DYL
+		alloc[w.addr] = coins * chain.BaseUnitsPerCoin
 	}
 
 	set := chain.NewValidatorSet(chain.GenerateValidators(n)...)
@@ -238,8 +241,6 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-// drive submits a small transfer between two random demo accounts on a
-// timer, so blocks are not always empty.
 // demoAccounts are the server-held wallets that generate background
 // traffic, with their genesis balance in DYL. The treasury and the exchange
 // are the whales; the rest are people.
@@ -334,7 +335,7 @@ func personalAmount() uint64 {
 // dyl converts a DYL amount to base units, rounded to a hundredth of a DYL
 // so the feed reads like money rather than noise.
 func dyl(amount float64) uint64 {
-	return uint64(math.Round(amount*100)) * (chain.BlockReward / 100)
+	return uint64(math.Round(amount*100)) * (chain.BaseUnitsPerCoin / 100)
 }
 
 // signFrom builds and signs a transfer from a server-held wallet, reserving
@@ -466,15 +467,16 @@ func (s *server) handleState(w http.ResponseWriter, _ *http.Request) {
 	sort.Slice(seen, func(i, j int) bool { return seen[i].Address < seen[j].Address })
 
 	writeJSON(w, map[string]any{
-		"genesis":    snap.Genesis,
-		"height":     snap.Height,
-		"supply":     snap.Supply,
-		"blocks":     snap.Blocks,
-		"txs":        snap.Txs,
-		"validators": snap.Validators,
-		"halts":      snap.Halts,
-		"accounts":   accounts,
-		"seen":       seen,
+		"genesis":     snap.Genesis,
+		"height":      snap.Height,
+		"supply":      snap.Supply,
+		"blockReward": uint64(chain.BlockReward),
+		"blocks":      snap.Blocks,
+		"txs":         snap.Txs,
+		"validators":  snap.Validators,
+		"halts":       snap.Halts,
+		"accounts":    accounts,
+		"seen":        seen,
 	})
 }
 
@@ -620,14 +622,14 @@ func (s *server) handleFaucet(w http.ResponseWriter, r *http.Request) {
 	s.lastFaucet[body.Address] = time.Now()
 	s.mu.Unlock()
 
-	tx, rollback := s.signFrom(s.faucet, body.Address, 100*chain.BlockReward)
+	tx, rollback := s.signFrom(s.faucet, body.Address, faucetGrant)
 	if err := s.cluster.Submit(tx); err != nil {
 		rollback()
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	s.markSeen(body.Address)
-	writeJSON(w, map[string]any{"funded": body.Address, "amount": 100 * chain.BlockReward})
+	writeJSON(w, map[string]any{"funded": body.Address, "amount": faucetGrant})
 }
 
 func (s *server) handleFault(w http.ResponseWriter, r *http.Request) {

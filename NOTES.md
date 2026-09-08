@@ -150,13 +150,22 @@ double-sign detection, moved into 7b because slashing needs it.
 
 ## Stage 7a: minting - done
 
-`BlockReward` (`coin.go`, one DYL) is credited to `block.Proposer` in
+`BlockReward` (`coin.go`) is credited to `block.Proposer` in
 `Apply`, after the transaction loop, guarded on `Proposer != ""` so genesis
 and `AddBlock` blocks mint nothing. Deterministic from the header, so
 `ReplayBlocks` and `Validate`'s replay-plus-`maps.Equal` check reproduce
 it, and the existing cluster tests (which assert only non-validator
 balances) still pass. `State.Supply()` sums balances, no burning: it starts
 at the genesis allocation and grows by `BlockReward` per committed block.
+
+`BlockReward` is 100 DYL, raised from 1 so supply visibly moves and a
+delegator's slice of a block is big enough to watch once staking lands.
+Inflation is not a concern on a chain with no value. Anything that needs
+"one DYL" now says `BaseUnitsPerCoin` (exported for that reason): the demo
+server's genesis alloc, the traffic driver's `dyl()` helper, and
+`faucetGrant` all used to multiply by `BlockReward` and would have silently
+scaled 100x. `/state` publishes `blockReward` so the UI computes minted
+supply instead of assuming one coin per block.
 
 The proposal 46 question becomes concrete here: `BlockReward` per block vs
 the size of a PSE release. If minting outruns the release the pause is
@@ -377,7 +386,9 @@ Still deferred, judged gold-plating for a toy:
   synchronisation. Test-only today (no handler calls them, and tests only
   touch them after the run joins). Fix with a lock or a snapshot if stage
   9 adds an `/evidence` endpoint.
-- **`uint64` amount overflow** in the demo's `n * chain.BlockReward` math.
+- **`uint64` amount overflow** in the demo's genesis-alloc multiplication.
+  The faucet seed is now 1e9 coins, 1e15 base units, still far under the
+  1.8e19 ceiling, but nothing checks it.
 
 Fixed since the audit:
 

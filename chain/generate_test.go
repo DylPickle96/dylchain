@@ -17,7 +17,7 @@ func TestGenerateValidators(t *testing.T) {
 		if i > 0 && v.stake >= vs[i-1].stake {
 			t.Errorf("rank %d stake %d is not below rank %d stake %d", i, v.stake, i-1, vs[i-1].stake)
 		}
-		if v.stake%baseUnitsPerCoin != 0 {
+		if v.stake%BaseUnitsPerCoin != 0 {
 			t.Errorf("rank %d stake %d is not a whole number of DYL", i, v.stake)
 		}
 	}
