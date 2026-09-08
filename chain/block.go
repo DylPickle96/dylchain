@@ -1,8 +1,10 @@
 package chain
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -80,4 +82,33 @@ func verifyBlockSignature(b Block) error {
 		return fmt.Errorf("proposer: %s, cannot verify block signature", b.Proposer)
 	}
 	return nil
+}
+
+// InclusionProof returns a Merkle proof that the transaction whose hex hash
+// is txHash sits in b: the leaf hash, its index, the sibling hashes from
+// leaf up to the root, and b.TxRoot. found is false if b holds no such
+// transaction. VerifyInclusionProof, or an equivalent light client, folds
+// the leaf back up to the root with it.
+func (b Block) InclusionProof(txHash string) (leaf []byte, index int, siblings [][]byte, root []byte, found bool) {
+	want, err := hex.DecodeString(txHash)
+	if err != nil || len(want) != sha256.Size {
+		return nil, 0, nil, nil, false
+	}
+	for i, tx := range b.Transactions {
+		if bytes.Equal(tx.Hash(), want) {
+			sibs, err := merkleProof(b.Transactions, i)
+			if err != nil {
+				return nil, 0, nil, nil, false
+			}
+			return tx.Hash(), i, sibs, b.TxRoot, true
+		}
+	}
+	return nil, 0, nil, nil, false
+}
+
+// VerifyInclusionProof reports whether folding leaf up through siblings by
+// index parity reproduces root. It is the check a light client runs on the
+// output of InclusionProof.
+func VerifyInclusionProof(leaf []byte, index int, siblings [][]byte, root []byte) bool {
+	return verifyMerkleProof(leaf, index, siblings, root)
 }

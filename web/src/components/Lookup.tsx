@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AccountInfo, Name, State } from '../api'
-import { formatDYL, getAccount, isAddress, isTxHash, shortHash } from '../api'
+import { formatDYL, getAccount, getProof, isAddress, isTxHash, shortHash } from '../api'
+import { foldToRoot } from '../merkle'
 import { Avatar, Copy, Icon, Who } from './bits'
 
 // Lookup shows what the search box found: an account with its balance and
@@ -64,6 +65,10 @@ function TxView({
   names: (addr: string) => Name
   onLookup: (q: string) => void
 }) {
+  const [proof, setProof] = useState<{ ok: boolean; root: string } | null>(null)
+  const [proofErr, setProofErr] = useState<string | null>(null)
+  const [checking, setChecking] = useState(false)
+
   const tx = state.txs.find((t) => t.hash === hash)
   if (!tx) {
     const oldest = state.txs[0]?.height
@@ -76,6 +81,21 @@ function TxView({
     )
   }
   const label = tx.kind === 'delegate' ? 'Delegate' : tx.kind === 'undelegate' ? 'Undelegate' : 'Transfer'
+
+  const verify = async () => {
+    setChecking(true)
+    setProof(null)
+    setProofErr(null)
+    try {
+      const p = await getProof(tx.height, tx.hash)
+      const got = foldToRoot(p.leaf, p.index, p.siblings)
+      setProof({ ok: got === p.root && p.leaf === tx.hash, root: p.root })
+    } catch (e) {
+      setProofErr(String(e))
+    } finally {
+      setChecking(false)
+    }
+  }
   return (
     <>
       <div className="lookup-name">
@@ -105,6 +125,32 @@ function TxView({
         </span>
         <span className="k">time</span>
         <span className="v">{new Date(tx.time * 1000).toLocaleString()}</span>
+      </div>
+
+      <div className="proof">
+        <button className="btn" onClick={verify} disabled={checking}>
+          <Icon name="check" />
+          {checking ? 'Checking…' : `Verify it is in block ${tx.height.toLocaleString('en-US')}`}
+        </button>
+        {proof && (
+          <div className={`proof-result ${proof.ok ? 'ok' : 'bad'}`}>
+            {proof.ok ? (
+              <>
+                Verified in your browser. The transaction hash folds up its sibling path to the block's transaction root{' '}
+                <span className="mono">{shortHash(proof.root)}</span>. No trust in the server needed.
+              </>
+            ) : (
+              <>The proof did not fold to the block root. Something is wrong.</>
+            )}
+          </div>
+        )}
+        {proofErr && <div className="proof-result bad">{proofErr}</div>}
+        {!proof && !proofErr && !checking && (
+          <p className="detail-sub">
+            Fetches the Merkle sibling path and recomputes the root here, the check a light client runs without the full
+            block.
+          </p>
+        )}
       </div>
     </>
   )

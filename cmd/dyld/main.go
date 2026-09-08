@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -18,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -419,6 +421,7 @@ func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/state", s.readLimited(s.handleState))
 	mux.HandleFunc("/account", s.readLimited(s.handleAccount))
+	mux.HandleFunc("/proof", s.readLimited(s.handleProof))
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/tx", s.writeLimited(s.handleTx))
 	mux.HandleFunc("/faucet", s.writeLimited(s.handleFaucet))
@@ -528,6 +531,41 @@ func (s *server) handleAccount(w http.ResponseWriter, r *http.Request) {
 		"balance":     bal,
 		"nonce":       nonce,
 		"delegations": s.cluster.Delegations(addr), // validator address -> bonded, or null
+	})
+}
+
+// handleProof returns a Merkle inclusion proof for one transaction in one
+// recent block: GET /proof?height=N&hash=HEX. The client folds the leaf up
+// through the siblings and checks it against the root, which is the block's
+// TxRoot. 404 if the block has scrolled out of the recent window or holds
+// no such transaction.
+func (s *server) handleProof(w http.ResponseWriter, r *http.Request) {
+	height, err := strconv.ParseInt(r.URL.Query().Get("height"), 10, 64)
+	if err != nil || height < 1 {
+		http.Error(w, "height required", http.StatusBadRequest)
+		return
+	}
+	hash := r.URL.Query().Get("hash")
+	if len(hash) != 64 {
+		http.Error(w, "hash required (64 hex characters)", http.StatusBadRequest)
+		return
+	}
+
+	leaf, index, siblings, root, ok := s.cluster.InclusionProof(height, hash)
+	if !ok {
+		http.Error(w, "no such transaction in a recent block", http.StatusNotFound)
+		return
+	}
+	sibs := make([]string, len(siblings))
+	for i, s := range siblings {
+		sibs[i] = hex.EncodeToString(s)
+	}
+	writeJSON(w, map[string]any{
+		"height":   height,
+		"leaf":     hex.EncodeToString(leaf),
+		"index":    index,
+		"siblings": sibs,
+		"root":     hex.EncodeToString(root),
 	})
 }
 

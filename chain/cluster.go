@@ -39,6 +39,7 @@ type Cluster struct {
 	balances    map[string]uint64
 	nonces      map[string]int64
 	delegations map[string]map[string]uint64 // delegator -> validator -> bonded, from the last committed state
+	fullBlocks  []Block                      // recent non-empty blocks kept whole, for inclusion proofs
 	subs        []chan Event
 }
 
@@ -247,6 +248,15 @@ func (c *Cluster) recordBlock(b Block, st State) {
 	if len(c.recent) > recentBlocks {
 		c.recent = c.recent[len(c.recent)-recentBlocks:]
 	}
+	// Keep whole only the blocks that carry transactions, enough of them to
+	// cover every entry in the recent-tx feed, so InclusionProof can always
+	// answer for a hash the feed still shows.
+	if len(b.Transactions) > 0 {
+		c.fullBlocks = append(c.fullBlocks, b)
+		if len(c.fullBlocks) > recentTxs {
+			c.fullBlocks = append([]Block(nil), c.fullBlocks[len(c.fullBlocks)-recentTxs:]...)
+		}
+	}
 	for _, tx := range b.Transactions {
 		c.txs = append(c.txs, TxInfo{
 			Hash:   hex.EncodeToString(tx.Hash()),
@@ -387,6 +397,26 @@ func (c *Cluster) Snapshot() Snapshot {
 	}
 	c.set.mu.RUnlock()
 	return s
+}
+
+// InclusionProof returns a Merkle proof that transaction txHash is in the
+// committed block at the given height, if that block is still in the
+// recent window. ok is false otherwise.
+func (c *Cluster) InclusionProof(height int64, txHash string) (leaf []byte, index int, siblings [][]byte, root []byte, ok bool) {
+	c.mu.Lock()
+	var blk Block
+	found := false
+	for _, b := range c.fullBlocks {
+		if b.Height == height {
+			blk, found = b, true
+			break
+		}
+	}
+	c.mu.Unlock()
+	if !found {
+		return nil, 0, nil, nil, false
+	}
+	return blk.InclusionProof(txHash)
 }
 
 // Delegations returns a copy of what addr has bonded, validator address to

@@ -3,6 +3,7 @@ package chain
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -268,5 +269,46 @@ func TestMerkleProofAgainstBlockTxRoot(t *testing.T) {
 		if !verifyMerkleProof(leafHash(t, b.Transactions[i]), i, proof, b.TxRoot) {
 			t.Errorf("index %d: proof did not match Block.TxRoot", i)
 		}
+	}
+}
+
+// Block.InclusionProof / VerifyInclusionProof are the exported light-client
+// path: for a real transaction it produces a proof that folds to the
+// block's TxRoot, and an unknown hash is not found.
+func TestBlockInclusionProof(t *testing.T) {
+	var list []Transaction
+	for i := range 5 {
+		list = append(list, Transaction{From: "dylA", To: "dylB", Amount: uint64(i + 1), Nonce: int64(i)})
+	}
+	b := Block{Transactions: list, TxRoot: merkleRoot(list)}
+
+	for i, tx := range list {
+		hexHash := hex.EncodeToString(tx.Hash())
+		leaf, index, sibs, root, ok := b.InclusionProof(hexHash)
+		if !ok {
+			t.Fatalf("tx %d: not found", i)
+		}
+		if index != i {
+			t.Errorf("tx %d: proof index %d", i, index)
+		}
+		if !bytes.Equal(root, b.TxRoot) {
+			t.Errorf("tx %d: proof root is not the block TxRoot", i)
+		}
+		if !VerifyInclusionProof(leaf, index, sibs, root) {
+			t.Errorf("tx %d: proof does not verify", i)
+		}
+		// A tampered leaf must not verify against the same path.
+		bad := append([]byte(nil), leaf...)
+		bad[0] ^= 0xff
+		if VerifyInclusionProof(bad, index, sibs, root) {
+			t.Errorf("tx %d: a tampered leaf verified", i)
+		}
+	}
+
+	if _, _, _, _, ok := b.InclusionProof(hex.EncodeToString(make([]byte, 32))); ok {
+		t.Error("InclusionProof found a transaction for an all-zero hash")
+	}
+	if _, _, _, _, ok := b.InclusionProof("not hex"); ok {
+		t.Error("InclusionProof accepted a non-hex hash")
 	}
 }

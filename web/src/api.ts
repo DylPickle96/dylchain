@@ -195,6 +195,20 @@ export async function getAccount(address: string): Promise<AccountInfo> {
   return a
 }
 
+export type InclusionProof = {
+  height: number
+  leaf: string
+  index: number
+  siblings: string[]
+  root: string
+}
+
+export async function getProof(height: number, hash: string): Promise<InclusionProof> {
+  const r = await fetch(`/proof?height=${height}&hash=${encodeURIComponent(hash)}`)
+  if (!r.ok) throw new Error((await r.text()).trim() || `/proof ${r.status}`)
+  return r.json()
+}
+
 // useCluster polls /state every few seconds and treats a successful poll as
 // "live". The /events stream is only a nudge to poll again immediately, so
 // updates feel instant; if it drops or the server caps it, the poll still

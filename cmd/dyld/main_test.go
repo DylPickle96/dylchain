@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -232,6 +234,76 @@ func TestFaucetRejectsBadAddressWithoutWedging(t *testing.T) {
 		getJSON(t, ts.URL+"/account?address="+good, &a)
 		return a.Balance > 0
 	}, "faucet did not fund after a rejected request")
+}
+
+// /proof returns a Merkle inclusion proof for a mined transaction that
+// folds back to the block's transaction root, and 404s for an unknown one.
+func TestProofEndpoint(t *testing.T) {
+	s := newServer(4)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go s.cluster.RunContext(ctx)
+
+	ts := httptest.NewServer(s.routes())
+	t.Cleanup(ts.Close)
+
+	tx, _ := s.signFrom(s.accounts["alice"], s.accounts["bob"].addr, chain.BlockReward)
+	if code := postJSON(t, ts.URL+"/tx", tx); code != http.StatusAccepted {
+		t.Fatalf("submit tx: got %d", code)
+	}
+	wantHash := hex.EncodeToString(tx.Hash())
+
+	var found struct {
+		Height int64 `json:"height"`
+		Hash   string
+	}
+	waitFor(t, 5*time.Second, func() bool {
+		var st struct {
+			Txs []struct {
+				Hash   string `json:"hash"`
+				Height int64  `json:"height"`
+			} `json:"txs"`
+		}
+		getJSON(t, ts.URL+"/state", &st)
+		for _, x := range st.Txs {
+			if x.Hash == wantHash {
+				found.Height, found.Hash = x.Height, x.Hash
+				return true
+			}
+		}
+		return false
+	}, "submitted transaction never landed in a block")
+
+	var p struct {
+		Leaf     string   `json:"leaf"`
+		Index    int      `json:"index"`
+		Siblings []string `json:"siblings"`
+		Root     string   `json:"root"`
+	}
+	getJSON(t, ts.URL+"/proof?height="+strconv.FormatInt(found.Height, 10)+"&hash="+wantHash, &p)
+
+	leaf, _ := hex.DecodeString(p.Leaf)
+	root, _ := hex.DecodeString(p.Root)
+	sibs := make([][]byte, len(p.Siblings))
+	for i, s := range p.Siblings {
+		sibs[i], _ = hex.DecodeString(s)
+	}
+	if p.Leaf != wantHash {
+		t.Errorf("proof leaf %s, want the tx hash %s", p.Leaf, wantHash)
+	}
+	if !chain.VerifyInclusionProof(leaf, p.Index, sibs, root) {
+		t.Error("proof does not verify against its own root")
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/proof?height=1&hash="+hex.EncodeToString(make([]byte, 32)), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("proof for an unknown tx: got %d, want 404", resp.StatusCode)
+	}
 }
 
 func TestGuardedDir(t *testing.T) {
