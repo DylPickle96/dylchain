@@ -1063,6 +1063,11 @@ tr.slashed .avatar {
   flex: 1;
 }
 
+.amt-row .btn {
+  width: auto;
+  flex-shrink: 0;
+}
+
 .wallet-msg {
   font-size: 12.5px;
   padding: 10px 12px;
@@ -1085,6 +1090,99 @@ tr.slashed .avatar {
 .activity {
   padding-top: 12px;
   border-top: 1px solid var(--border);
+}
+
+/* staking */
+
+.staked-tag {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-left: 8px;
+  vertical-align: 3px;
+}
+
+.stake {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.stake select,
+.stake input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border-strong);
+  color: var(--ink);
+  padding: 9px 12px;
+  border-radius: 10px;
+  font: inherit;
+}
+
+.stake select:focus,
+.stake input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.bondlist {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.bondlist li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bondlist .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bondlist .amt {
+  margin-left: auto;
+  font-weight: 500;
+}
+
+.deleg-tag {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--accent-strong);
+  margin-left: 6px;
+}
+
+.txkind {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.txkind.stake {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.txkind.unstake {
+  color: var(--ink-dim);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 /* lookup */

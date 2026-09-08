@@ -18,7 +18,7 @@ type Chain struct {
 // NewChain returns a chain containing only its genesis block, so a Chain
 // never exists without one.
 func NewChain(alloc map[string]uint64) Chain {
-	chain, err := newChainFromGenesis(genesisBlock(alloc))
+	chain, err := newChainFromGenesis(genesisBlock(alloc, nil))
 	if err != nil {
 		panic(fmt.Sprintf("invalid genesis: %v", err))
 	}
@@ -96,6 +96,9 @@ func (c *Chain) Validate() error {
 	}
 	if !maps.Equal(state.Nonces, c.state.Nonces) {
 		return fmt.Errorf("replayed nonces do not match chain state")
+	}
+	if !delegationsEqual(state.Delegations, c.state.Delegations) {
+		return fmt.Errorf("replayed delegations do not match chain state")
 	}
 	return nil
 

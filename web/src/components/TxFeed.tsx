@@ -52,7 +52,17 @@ export function TxFeed({
                       <Who addr={t.from} name={names(t.from)} onClick={onLookup} />
                     </td>
                     <td className="arrow">
-                      <Icon name="arrow" size={13} />
+                      {t.kind === 'delegate' ? (
+                        <span className="txkind stake" title="delegate">
+                          stakes
+                        </span>
+                      ) : t.kind === 'undelegate' ? (
+                        <span className="txkind unstake" title="undelegate">
+                          unstakes
+                        </span>
+                      ) : (
+                        <Icon name="arrow" size={13} />
+                      )}
                     </td>
                     <td>
                       <Who addr={t.to} name={names(t.to)} onClick={onLookup} />

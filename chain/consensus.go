@@ -194,6 +194,10 @@ func (n *node) run(maxHeight int64) {
 				n.cluster.recordHeal(addr, h)
 			}
 		}
+		// Re-read delegated stake from our own committed state, so a
+		// delegate or undelegate that landed in the previous block changes
+		// this height's weights for every node identically.
+		n.election.syncDelegations(n.chain.state)
 		n.runHeight(h)
 		n.prunePending(h)
 		for hh := range n.seenVotes {

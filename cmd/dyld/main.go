@@ -270,14 +270,16 @@ func (s *server) drive(ctx context.Context, every time.Duration) {
 			return
 		case <-t.C:
 			switch r := rand.Intn(100); {
-			case r < 55:
+			case r < 48:
 				s.submitDemo(s.randomPerson(""), s.randomPerson, personalAmount())
-			case r < 70:
+			case r < 62:
 				s.submitDemo("exchange", s.randomPerson, dyl(10+rand.Float64()*490))
-			case r < 80:
+			case r < 72:
 				s.submitDemo("treasury", s.randomValidator, dyl(25+rand.Float64()*75))
-			case r < 88:
+			case r < 80:
 				s.submitDemo(s.randomPerson(""), func(string) string { return s.accounts["exchange"].addr }, personalAmount())
+			case r < 90:
+				s.submitStake() // a person delegates to or undelegates from a validator
 			default:
 				for i, n := 0, 3+rand.Intn(4); i < n; i++ {
 					s.submitDemo(s.randomPerson(""), s.randomPerson, personalAmount())
@@ -297,6 +299,32 @@ func (s *server) submitDemo(from string, pick func(exclude string) string, amoun
 		return
 	}
 	tx, rollback := s.signFrom(w, to, amount)
+	if s.cluster.Submit(tx) != nil {
+		rollback()
+	}
+}
+
+// submitStake has a random person delegate to a validator, or, half the
+// time and only if they already have a bond, undelegate part of one. It
+// keeps the validator table showing live delegated stake.
+func (s *server) submitStake() {
+	w := s.accounts[people[rand.Intn(len(people))]]
+	bonds := s.cluster.Delegations(w.addr)
+
+	kind, to, amount := chain.KindDelegate, s.randomValidator(""), dyl(25+rand.Float64()*225)
+	if len(bonds) > 0 && rand.Intn(2) == 0 {
+		for v, have := range bonds { // range over a map: an arbitrary existing bond
+			kind, to, amount = chain.KindUndelegate, v, have/2+dyl(1)
+			if amount > have {
+				amount = have
+			}
+			break
+		}
+	}
+	if to == "" {
+		return
+	}
+	tx, rollback := s.signFromKind(kind, w, to, amount)
 	if s.cluster.Submit(tx) != nil {
 		rollback()
 	}
@@ -344,6 +372,11 @@ func dyl(amount float64) uint64 {
 // accepted, so a rejected send does not leave the local nonce ahead of the
 // chain forever.
 func (s *server) signFrom(from wallet, to string, amount uint64) (tx chain.Transaction, rollback func()) {
+	return s.signFromKind(chain.KindTransfer, from, to, amount)
+}
+
+// signFromKind is signFrom for any transaction kind.
+func (s *server) signFromKind(kind string, from wallet, to string, amount uint64) (tx chain.Transaction, rollback func()) {
 	s.mu.Lock()
 	_, chainNonce := s.cluster.Account(from.addr)
 	nonce := chainNonce
@@ -353,7 +386,7 @@ func (s *server) signFrom(from wallet, to string, amount uint64) (tx chain.Trans
 	s.nonces[from.addr] = nonce + 1
 	s.mu.Unlock()
 
-	tx = chain.Transaction{From: from.addr, To: to, Amount: amount, Nonce: nonce}
+	tx = chain.Transaction{Kind: kind, From: from.addr, To: to, Amount: amount, Nonce: nonce}
 	tx.Signature = tx.Sign(from.priv)
 	return tx, func() {
 		s.mu.Lock()
@@ -489,7 +522,12 @@ func (s *server) handleAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bal, nonce := s.cluster.Account(addr)
-	writeJSON(w, map[string]any{"address": addr, "balance": bal, "nonce": nonce})
+	writeJSON(w, map[string]any{
+		"address":     addr,
+		"balance":     bal,
+		"nonce":       nonce,
+		"delegations": s.cluster.Delegations(addr), // validator address -> bonded, or null
+	})
 }
 
 func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {

@@ -27,18 +27,19 @@ type Cluster struct {
 	nodes   []*node
 
 	// live state, updated as blocks commit, read by Snapshot and Account
-	mu       sync.Mutex
-	genesis  int64 // genesis block time, unix seconds
-	height   int64
-	supply   uint64
-	recent   []BlockInfo
-	txs      []TxInfo
-	proposed map[string]int
-	slashed  map[string]bool
-	halts    []string // "<address>: <reason>" for nodes that stopped on an impossible state
-	balances map[string]uint64
-	nonces   map[string]int64
-	subs     []chan Event
+	mu          sync.Mutex
+	genesis     int64 // genesis block time, unix seconds
+	height      int64
+	supply      uint64
+	recent      []BlockInfo
+	txs         []TxInfo
+	proposed    map[string]int
+	slashed     map[string]bool
+	halts       []string // "<address>: <reason>" for nodes that stopped on an impossible state
+	balances    map[string]uint64
+	nonces      map[string]int64
+	delegations map[string]map[string]uint64 // delegator -> validator -> bonded, from the last committed state
+	subs        []chan Event
 }
 
 // BlockInfo is the summary of one committed block, for the Snapshot feed.
@@ -54,6 +55,7 @@ type BlockInfo struct {
 type TxInfo struct {
 	Hash   string `json:"hash"` // hex
 	Height int64  `json:"height"`
+	Kind   string `json:"kind,omitempty"` // "", "delegate", or "undelegate"
 	From   string `json:"from"`
 	To     string `json:"to"`
 	Amount uint64 `json:"amount"`
@@ -69,12 +71,16 @@ type Event struct {
 	Validator string `json:"validator"` // proposer for "block", offender/halted/healed node otherwise
 }
 
-// ValidatorInfo is one validator's state in a Snapshot.
+// ValidatorInfo is one validator's state in a Snapshot. Stake is the
+// effective voting weight: genesis self-stake plus delegations, or zero
+// while slashed. Delegated is the delegated portion, shown even while
+// slashed so a delegator can see their bond is still there.
 type ValidatorInfo struct {
 	Moniker     string  `json:"moniker"`
 	Address     string  `json:"address"`
 	Stake       uint64  `json:"stake"`
-	VotingPower float64 `json:"votingPower"` // fraction of current total stake
+	Delegated   uint64  `json:"delegated"`
+	VotingPower float64 `json:"votingPower"` // fraction of current total effective stake
 	Slashed     bool    `json:"slashed"`
 	Proposed    int     `json:"proposed"`
 }
@@ -101,7 +107,11 @@ type Snapshot struct {
 // different genesis hash (genesisBlock stamps time.Now), and block 1 would
 // then fail to link on every node but the proposer.
 func NewCluster(alloc map[string]uint64, set *ValidatorSet, maxBlockTxs int) *Cluster {
-	genesis := genesisBlock(alloc)
+	valBase := make(map[string]uint64, len(set.members))
+	for _, m := range set.members {
+		valBase[m.address] = m.stake
+	}
+	genesis := genesisBlock(alloc, valBase)
 	mempool := NewMempool()
 	b := newBus(len(set.members))
 
@@ -149,7 +159,17 @@ func NewCluster(alloc map[string]uint64, set *ValidatorSet, maxBlockTxs int) *Cl
 // never reaches a proposer or the seen-address list. Nonce and balance are
 // checked later, when a proposer tries to apply it.
 func (c *Cluster) Submit(tx Transaction) error {
-	if tx.From == tx.To || tx.Amount == 0 {
+	switch tx.Kind {
+	case KindTransfer:
+		if tx.From == tx.To {
+			return fmt.Errorf("malformed transaction")
+		}
+	case KindDelegate, KindUndelegate:
+		// To is a validator; From == To (self-delegation) is allowed.
+	default:
+		return fmt.Errorf("unknown transaction kind %q", tx.Kind)
+	}
+	if tx.Amount == 0 {
 		return fmt.Errorf("malformed transaction")
 	}
 	pub, err := pubKeyFromAddress(tx.From)
@@ -214,6 +234,7 @@ func (c *Cluster) recordBlock(b Block, st State) {
 	c.supply = st.Supply()
 	c.balances = st.Balances
 	c.nonces = st.Nonces
+	c.delegations = st.Delegations
 	c.proposed[b.Proposer]++
 	c.recent = append(c.recent, BlockInfo{
 		Height:   b.Height,
@@ -229,6 +250,7 @@ func (c *Cluster) recordBlock(b Block, st State) {
 		c.txs = append(c.txs, TxInfo{
 			Hash:   hex.EncodeToString(tx.Hash()),
 			Height: b.Height,
+			Kind:   tx.Kind,
 			From:   tx.From,
 			To:     tx.To,
 			Amount: tx.Amount,
@@ -327,20 +349,34 @@ func (c *Cluster) Snapshot() Snapshot {
 	for k, v := range c.slashed {
 		slashed[k] = v
 	}
+	delegatedTo := make(map[string]uint64)
+	for _, byValidator := range c.delegations {
+		for validator, amount := range byValidator {
+			delegatedTo[validator] += amount
+		}
+	}
 	c.mu.Unlock()
 
 	c.set.mu.RLock()
-	total := c.set.totalStake()
 	s.Validators = make([]ValidatorInfo, len(c.set.members))
+	effective := make([]uint64, len(c.set.members))
+	var total uint64
+	for i, m := range c.set.members {
+		if !slashed[m.address] {
+			effective[i] = m.stake + delegatedTo[m.address]
+		}
+		total += effective[i]
+	}
 	for i, m := range c.set.members {
 		vp := 0.0
 		if total > 0 {
-			vp = float64(m.stake) / float64(total)
+			vp = float64(effective[i]) / float64(total)
 		}
 		s.Validators[i] = ValidatorInfo{
 			Moniker:     m.moniker,
 			Address:     m.address,
-			Stake:       m.stake,
+			Stake:       effective[i],
+			Delegated:   delegatedTo[m.address],
 			VotingPower: vp,
 			Slashed:     slashed[m.address],
 			Proposed:    proposed[m.address],
@@ -348,6 +384,21 @@ func (c *Cluster) Snapshot() Snapshot {
 	}
 	c.set.mu.RUnlock()
 	return s
+}
+
+// Delegations returns a copy of what addr has bonded, validator address to
+// amount, or nil if addr has delegated nothing.
+func (c *Cluster) Delegations(addr string) map[string]uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.delegations[addr] == nil {
+		return nil
+	}
+	out := make(map[string]uint64, len(c.delegations[addr]))
+	for validator, amount := range c.delegations[addr] {
+		out[validator] = amount
+	}
+	return out
 }
 
 // Account returns an address's current balance and next expected nonce.

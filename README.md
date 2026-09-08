@@ -19,7 +19,7 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 | 4 | ed25519 transaction signatures | done |
 | 5 | Merkle root and inclusion proofs | done |
 | 6 | Multiple validators (BFT consensus) | done, happy path |
-| 7 | Minting, equivocation detection, slashing | done |
+| 7 | Minting, equivocation detection, slashing, delegation | done |
 | 7.5 | Scaling to a few hundred validators | done |
 | 8 | Demo server (HTTP + SSE) | done |
 | 9 | Explorer UI and browser burner wallet | done |
@@ -38,12 +38,12 @@ web/       the explorer UI and burner wallet, React + Vite
 |------|----------|
 | `block.go` | `Block`, `Block.Hash`, `genesisBlock`, proposer signatures |
 | `chain.go` | `Chain`, `NewChain`, `AddBlock`, `CommitBlock`, `Validate`, `ReplayBlocks` |
-| `transaction.go` | `Transaction`, `Sign`, Merkle root and proofs |
-| `state.go` | `State`, `NewState`, `Apply` |
+| `transaction.go` | `Transaction` and its `Kind`, `Sign`, Merkle root and proofs |
+| `state.go` | `State`, `NewState`, `Apply`, the delegate/undelegate rules and reward split |
 | `address.go` | address derivation to and from ed25519 keys |
 | `coin.go` | native coin denom, precision, amount formatting, block reward |
 | `validator.go` | `Validator`, `ValidatorSet`, `ProposerForHeight` reference, `Slash` |
-| `proposer.go` | `election`, a node's incremental copy of the priority accumulator |
+| `proposer.go` | `election`, a node's incremental accumulator, weight re-read from state |
 | `mempool.go` | `Mempool`, the shared pending-transaction queue |
 | `consensus.go` | votes, the in-process bus, the per-validator round loop, equivocation detection |
 | `evidence.go` | `Evidence` for a double-vote, `verifyEvidence` |
@@ -53,12 +53,14 @@ web/       the explorer UI and burner wallet, React + Vite
 
 ## Model
 
-**Account based, not UTXO.** State is a balance and a nonce per address:
+**Account based, not UTXO.** State is a balance and a nonce per address,
+plus what each holder has bonded behind each validator:
 
 ```go
 type State struct {
-	Balances map[string]uint64
-	Nonces   map[string]int64
+	Balances    map[string]uint64
+	Nonces      map[string]int64
+	Delegations map[string]map[string]uint64 // delegator -> validator -> bonded
 }
 ```
 
@@ -73,9 +75,20 @@ bech32 prefix (`cosmos1...`, `core1...`). It is reversible, so `Apply` can
 recover the public key from `tx.From` to verify a signature.
 
 **Transactions are signed.** A `Transaction` carries a `Signature` over
-its authorised fields (`From`, `To`, `Amount`, `Nonce`), never over the
-signature itself. The private key never enters any on-chain type. It is
-passed to `Sign` on the sender's side and nowhere else.
+its authorised fields (`Kind`, `From`, `To`, `Amount`, `Nonce`), never
+over the signature itself. The private key never enters any on-chain type.
+It is passed to `Sign` on the sender's side and nowhere else.
+
+**Three kinds of transaction.** The zero `Kind` is a transfer. `delegate`
+moves `Amount` from `From`'s balance into a bond behind validator `To`;
+`undelegate` moves it back. Bonded tokens leave the balance but are still
+counted in `Supply`, and they raise `To`'s consensus weight from the
+height after the block. Every block's `BlockReward` is then split between
+the proposer's genesis self-stake and its delegators, pro rata, so a
+delegator earns a share of each block their validator proposes. There is
+no unbonding delay and no commission: it is a demo. A slashed validator's
+delegations stop counting and stop earning, but are not burned, so a
+delegator can still `undelegate` them.
 
 **Blocks commit to their transactions with a Merkle root.** `Block.TxRoot`
 is the root of a binary hash tree over the transactions, using RFC 6962
@@ -117,8 +130,9 @@ wrong nonce, insufficient balance, malformed) rejects the whole block, and
 nothing is appended. Within a valid block, transactions apply in order, so
 a later one sees the effect of an earlier one.
 
-The genesis allocation lives in the genesis block's `Alloc` field, not just
-in state, so `ReplayBlocks` can rebuild the ledger from a block list alone.
+The genesis allocation lives in the genesis block's `Alloc` field, and the
+validators' genesis self-stakes in its `Validators` field, so `ReplayBlocks`
+can rebuild the ledger and the reward-split weights from a block list alone.
 `NewChain` derives its own starting state through that same replay path.
 
 ## Consensus
@@ -144,12 +158,21 @@ cross between nodes.
    thirds of total stake** are in (`3*accepted > 2*total`), commit. That
    commit is final: no fork choice, no reversion.
 
-Applying a committed block mints `BlockReward` (100 DYL) to its proposer,
-so total supply grows by one reward per height. The figure is deliberately
-generous, not a claim about sensible issuance: the coin has no value and
-the demo reads better when supply moves. It happens inside `Apply`, keyed off
-the block's `Proposer`, so `ReplayBlocks` and `Validate` reproduce it.
-`State.Supply()` is the running total (sum of balances, nothing is burned).
+Applying a committed block mints `BlockReward` (100 DYL) per height. The
+figure is deliberately generous, not a claim about sensible issuance: the
+coin has no value and the demo reads better when supply moves. `Apply`
+splits it, keyed off the block's `Proposer`, between the proposer's genesis
+self-stake and its delegators in proportion to stake, with the rounding
+dust going to the proposer and delegators paid in sorted order so every
+node builds byte-identical state. `ReplayBlocks` and `Validate` reproduce
+it. `State.Supply()` is the running total: every balance plus every bonded
+delegation, nothing burned.
+
+Delegated stake feeds back into consensus. After each committed block a
+node re-reads how much is bonded behind each validator from its own state
+(`election.syncDelegations`), so a `delegate` or `undelegate` in block `h`
+changes every node's proposer selection and two-thirds threshold from
+height `h+1`, in lockstep, with no extra messages.
 
 Votes and proposals that arrive out of order (a vote before its proposal, a
 message for a later height) are stashed per node and rescanned, so timing
@@ -276,11 +299,12 @@ expand to list their transactions, and the search box looks up any address
 or recent block height.
 
 It also holds a burner wallet: an ed25519 key pair generated in the browser
-and kept in `localStorage`. Visitors fund it from the faucet and send DYL to
-validators, demo accounts, or any address they paste, and their own
-transfers are highlighted in the feed. The chain has no value, so a
-plaintext key in the browser is an acceptable trade for zero friction.
-Transactions are signed client-side over the same byte layout
+and kept in `localStorage`. Visitors fund it from the faucet, send DYL to
+validators, demo accounts, or any address they paste, and stake behind a
+validator to earn a share of the blocks it proposes. Their own transfers
+are highlighted in the feed. The chain has no value, so a plaintext key in
+the browser is an acceptable trade for zero friction. Transactions, staking
+included, are signed client-side over the same byte layout
 `chain/transaction.go` uses, so the server verifies them with no special
 path.
 

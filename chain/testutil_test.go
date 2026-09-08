@@ -37,10 +37,26 @@ func newWallet(t *testing.T) wallet {
 	return wallet{pub: pub, priv: priv, addr: deriveAddress(pub)}
 }
 
-// send builds a transaction from this wallet and signs it.
+// send builds a signed transfer from this wallet.
 func (w wallet) send(t *testing.T, to string, amount uint64, nonce int64) Transaction {
 	t.Helper()
 	txn := Transaction{From: w.addr, To: to, Amount: amount, Nonce: nonce}
+	txn.Signature = txn.Sign(w.priv)
+	return txn
+}
+
+// delegate and undelegate build signed staking transactions from this
+// wallet, bonding to or unbonding from validator v.
+func (w wallet) delegate(t *testing.T, v string, amount uint64, nonce int64) Transaction {
+	t.Helper()
+	txn := Transaction{Kind: KindDelegate, From: w.addr, To: v, Amount: amount, Nonce: nonce}
+	txn.Signature = txn.Sign(w.priv)
+	return txn
+}
+
+func (w wallet) undelegate(t *testing.T, v string, amount uint64, nonce int64) Transaction {
+	t.Helper()
+	txn := Transaction{Kind: KindUndelegate, From: w.addr, To: v, Amount: amount, Nonce: nonce}
 	txn.Signature = txn.Sign(w.priv)
 	return txn
 }

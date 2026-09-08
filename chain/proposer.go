@@ -10,51 +10,80 @@ const slashDelay = 2
 
 // election is a node's private, incremental copy of the stake-weighted
 // priority accumulator, plus the stake view the tally uses. Every node
-// advances it one step per height in the same order and applies the same
-// slashes at the same effective heights, so they all elect the same
-// proposer and weigh votes the same way without communicating.
+// advances it one step per height in the same order, applies the same
+// slashes at the same effective heights, and re-reads delegated stake from
+// its own committed state each height, so they all elect the same proposer
+// and weigh votes the same way without communicating.
 //
 // It is advanced from the node goroutine only; no locking.
 type election struct {
 	addresses  []string
-	stake      []uint64 // effective stake, zeroed when a slash takes effect
-	origStake  []uint64 // stake to put back when a heal takes effect
+	origStake  []uint64 // genesis self-stake, never changes
+	delegated  []uint64 // total delegated, refreshed from committed state each height
+	slashed    []bool   // true from a slash's effective height until its heal
 	priorities []int64  // the accumulator, indexed like addresses
 }
 
-// newElection snapshots the set's members and their stakes.
+// newElection snapshots the set's members and their self-stakes. Delegated
+// stake starts at zero and is filled in by syncDelegations before the
+// first height.
 func newElection(set *ValidatorSet) *election {
 	set.mu.RLock()
 	defer set.mu.RUnlock()
 	e := &election{
 		addresses:  make([]string, len(set.members)),
-		stake:      make([]uint64, len(set.members)),
 		origStake:  make([]uint64, len(set.members)),
+		delegated:  make([]uint64, len(set.members)),
+		slashed:    make([]bool, len(set.members)),
 		priorities: make([]int64, len(set.members)),
 	}
 	for i, m := range set.members {
 		e.addresses[i] = m.address
-		e.stake[i] = m.stake
 		e.origStake[i] = m.stake
 	}
 	return e
 }
 
-// slash zeroes a validator's effective stake from the next next() on.
+// effective is a validator's voting weight this height: self-stake plus
+// delegations, or zero while slashed.
+func (e *election) effective(i int) uint64 {
+	if e.slashed[i] {
+		return 0
+	}
+	return e.origStake[i] + e.delegated[i]
+}
+
+// syncDelegations re-reads how much is bonded behind each validator from a
+// committed state. Every node runs this over the same state each height, so
+// a delegate or undelegate in block h changes the weights all nodes use
+// from height h+1.
+func (e *election) syncDelegations(s State) {
+	tally := make(map[string]uint64, len(s.Delegations))
+	for _, byValidator := range s.Delegations {
+		for validator, amount := range byValidator {
+			tally[validator] += amount
+		}
+	}
+	for i, addr := range e.addresses {
+		e.delegated[i] = tally[addr]
+	}
+}
+
+// slash drops a validator's weight to zero from the next next() on.
 func (e *election) slash(addr string) {
 	for i, a := range e.addresses {
 		if a == addr {
-			e.stake[i] = 0
+			e.slashed[i] = true
 			return
 		}
 	}
 }
 
-// restore undoes a slash: the validator's effective stake goes back to its
-// original value, and its accumulator priority is set to the lowest among
-// the validators that still have stake, so it rejoins the rotation at the
-// back rather than proposing several blocks in a row to work off a stale
-// priority. Every node calls this at the same height, so they stay in step.
+// restore undoes a slash: the validator counts again, and its accumulator
+// priority is set to the lowest among the validators that still have
+// weight, so it rejoins the rotation at the back rather than proposing
+// several blocks in a row to work off a stale priority. Every node calls
+// this at the same height, so they stay in step.
 func (e *election) restore(addr string) {
 	idx := -1
 	for i, a := range e.addresses {
@@ -66,12 +95,12 @@ func (e *election) restore(addr string) {
 	if idx < 0 {
 		return
 	}
-	e.stake[idx] = e.origStake[idx]
+	e.slashed[idx] = false
 
 	low := int64(0)
 	first := true
-	for i := range e.stake {
-		if i == idx || e.stake[i] == 0 {
+	for i := range e.addresses {
+		if i == idx || e.effective(i) == 0 {
 			continue
 		}
 		if first || e.priorities[i] < low {
@@ -83,19 +112,19 @@ func (e *election) restore(addr string) {
 }
 
 // next advances one height and returns that height's proposer address:
-// every validator's priority rises by its stake, the highest with stake
-// left proposes (ties by index), and the winner drops by the total stake.
+// every validator's priority rises by its weight, the highest with weight
+// left proposes (ties by index), and the winner drops by the total weight.
 func (e *election) next() string {
 	var total int64
-	for _, s := range e.stake {
-		total += int64(s)
+	for i := range e.addresses {
+		total += int64(e.effective(i))
 	}
-	for i := range e.stake {
-		e.priorities[i] += int64(e.stake[i])
+	for i := range e.addresses {
+		e.priorities[i] += int64(e.effective(i))
 	}
 	winner := -1
-	for i := range e.stake {
-		if e.stake[i] == 0 {
+	for i := range e.addresses {
+		if e.effective(i) == 0 {
 			continue
 		}
 		if winner < 0 || e.priorities[i] > e.priorities[winner] {
@@ -109,20 +138,20 @@ func (e *election) next() string {
 	return e.addresses[winner]
 }
 
-// totalStake is the sum of effective stakes, for the commit threshold.
+// totalStake is the sum of effective weights, for the commit threshold.
 func (e *election) totalStake() uint64 {
 	var t uint64
-	for _, s := range e.stake {
-		t += s
+	for i := range e.addresses {
+		t += e.effective(i)
 	}
 	return t
 }
 
-// stakeOf is a voter's effective stake, or zero if it is not a member.
+// stakeOf is a voter's effective weight, or zero if it is not a member.
 func (e *election) stakeOf(addr string) uint64 {
 	for i, a := range e.addresses {
 		if a == addr {
-			return e.stake[i]
+			return e.effective(i)
 		}
 	}
 	return 0

@@ -9,8 +9,9 @@ import (
 )
 
 // Block is one entry in the chain. TxRoot commits to Transactions, Hash
-// covers the header (everything but Signature). Alloc is set on the genesis
-// block only; Proposer and Signature only on blocks produced by consensus.
+// covers the header (everything but Signature). Alloc and Validators are
+// set on the genesis block only; Proposer and Signature only on blocks
+// produced by consensus.
 type Block struct {
 	Transactions []Transaction     `json:"Transactions"`
 	TxRoot       []byte            `json:"TxRoot"`
@@ -18,6 +19,7 @@ type Block struct {
 	CreatedAt    int64             `json:"CreatedAt"`
 	Height       int64             `json:"Height"`
 	Alloc        map[string]uint64 `json:"Alloc,omitempty"`
+	Validators   map[string]uint64 `json:"Validators,omitempty"` // validator address -> genesis self-stake
 	Proposer     string            `json:"Proposer,omitempty"`
 	Signature    []byte            `json:"Signature,omitempty"`
 }
@@ -32,6 +34,7 @@ func (b Block) Hash() []byte {
 		CreatedAt:    b.CreatedAt,
 		Height:       b.Height,
 		Alloc:        b.Alloc,
+		Validators:   b.Validators,
 		Proposer:     b.Proposer,
 	}
 	hasher := sha256.New()
@@ -49,15 +52,17 @@ func (b Block) sign(priv ed25519.PrivateKey) []byte {
 	return ed25519.Sign(priv, b.Hash())
 }
 
-// genesisBlock builds the height-zero block from a genesis allocation. It
-// carries no proposer, so applying it mints nothing, and its Alloc is what
-// ReplayBlocks seeds state from.
-func genesisBlock(alloc map[string]uint64) Block {
+// genesisBlock builds the height-zero block. It carries no proposer, so
+// applying it mints nothing. Alloc seeds balances and valBase (validator
+// address -> genesis self-stake) seeds the reward split; both come out of
+// ReplayBlocks. valBase may be nil for a chain with no validators.
+func genesisBlock(alloc, valBase map[string]uint64) Block {
 	return Block{
 		Transactions: []Transaction{},
 		TxRoot:       merkleRoot(nil),
 		PreviousHash: []byte{},
 		Alloc:        alloc,
+		Validators:   valBase,
 		CreatedAt:    time.Now().Unix(),
 		Height:       0,
 	}

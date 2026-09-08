@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { Name, State } from '../api'
-import { dylToUdyl, formatDYL, getAccount, postFaucet, postTx, shortAddr } from '../api'
-import { signTransfer, type Wallet as W } from '../wallet'
+import type { AccountInfo, Name, State } from '../api'
+import { compactDYL, dylToUdyl, formatDYL, getAccount, postFaucet, postTx, shortAddr } from '../api'
+import { signDelegate, signTransfer, signUndelegate, type Wallet as W } from '../wallet'
 import { Avatar, Copy, Icon } from './bits'
 
 const CUSTOM = '__custom__'
@@ -17,10 +17,12 @@ export function Wallet({
   names: (addr: string) => Name
   onReset: () => void
 }) {
-  const [acct, setAcct] = useState<{ balance: number; nonce: number } | null>(null)
+  const [acct, setAcct] = useState<AccountInfo | null>(null)
   const [to, setTo] = useState('')
   const [customTo, setCustomTo] = useState('')
   const [amount, setAmount] = useState('')
+  const [stakeTo, setStakeTo] = useState('')
+  const [stakeAmount, setStakeAmount] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ text: string; kind: 'ok' | 'err' } | null>(null)
 
@@ -70,6 +72,15 @@ export function Wallet({
     [state.txs, wallet.address],
   )
 
+  const bonds = useMemo(() => {
+    const d = acct?.delegations
+    if (!d) return []
+    return Object.entries(d)
+      .map(([address, amount]) => ({ address, amount, name: names(address) }))
+      .sort((a, b) => b.amount - a.amount)
+  }, [acct, names])
+  const staked = bonds.reduce((s, b) => s + b.amount, 0)
+
   const faucet = async () => {
     setBusy(true)
     setMsg(null)
@@ -113,6 +124,55 @@ export function Wallet({
     }
   }
 
+  const stake = async () => {
+    const amt = dylToUdyl(stakeAmount)
+    if (!stakeTo) return setMsg({ text: 'Pick a validator to stake behind.', kind: 'err' })
+    if (!amt) return setMsg({ text: 'Enter an amount to stake.', kind: 'err' })
+    if (acct && Number(amt) > acct.balance) return setMsg({ text: 'Not enough DYL to stake that.', kind: 'err' })
+
+    setBusy(true)
+    setMsg(null)
+    try {
+      const { nonce } = await getAccount(wallet.address)
+      const err = await postTx(signDelegate(wallet, stakeTo, amt, nonce))
+      setMsg(
+        err
+          ? { text: err, kind: 'err' }
+          : {
+              text: `Staked ${formatDYL(Number(amt))} DYL behind ${names(stakeTo).label}. You earn a share of every block it proposes.`,
+              kind: 'ok',
+            },
+      )
+      if (!err) {
+        setStakeAmount('')
+        setTimeout(refresh, 1500)
+      }
+    } catch (e) {
+      setMsg({ text: String(e), kind: 'err' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const unstake = async (validator: string, amountBase: number) => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const { nonce } = await getAccount(wallet.address)
+      const err = await postTx(signUndelegate(wallet, validator, BigInt(amountBase), nonce))
+      setMsg(
+        err
+          ? { text: err, kind: 'err' }
+          : { text: `Unstaked ${formatDYL(amountBase)} DYL from ${names(validator).label}.`, kind: 'ok' },
+      )
+      if (!err) setTimeout(refresh, 1500)
+    } catch (e) {
+      setMsg({ text: String(e), kind: 'err' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <section className="panel wallet">
       <header>
@@ -135,8 +195,9 @@ export function Wallet({
           <Avatar addr={wallet.address} kind="you" size={40} />
           <div>
             <div className="balance">
-              <span className="mono">{acct ? formatDYL(acct.balance) : '·'}</span>
+              <span className="mono">{acct ? formatDYL(acct.balance, 2) : '·'}</span>
               <span className="unit">DYL</span>
+              {staked > 0 && <span className="staked-tag">+ {compactDYL(staked)} staked</span>}
             </div>
             <div className="addr-row">
               <span className="mono dim" title={wallet.address}>
@@ -193,6 +254,46 @@ export function Wallet({
           </div>
         </div>
 
+        <div className="stake">
+          <div className="detail-label">Stake behind a validator</div>
+          <select value={stakeTo} onChange={(e) => setStakeTo(e.target.value)} aria-label="validator">
+            <option value="">Choose a validator…</option>
+            {[...state.validators]
+              .sort((a, b) => b.stake - a.stake)
+              .map((v) => (
+                <option key={v.address} value={v.address} disabled={v.slashed}>
+                  {v.moniker} · {(v.votingPower * 100).toFixed(1)}%{v.slashed ? ' · slashed' : ''}
+                </option>
+              ))}
+          </select>
+          <div className="amt-row">
+            <input
+              placeholder="Amount in DYL"
+              inputMode="decimal"
+              value={stakeAmount}
+              onChange={(e) => setStakeAmount(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && stake()}
+            />
+            <button className="btn" onClick={stake} disabled={busy}>
+              Stake
+            </button>
+          </div>
+          {bonds.length > 0 && (
+            <ul className="bondlist">
+              {bonds.map((b) => (
+                <li key={b.address}>
+                  <Avatar addr={b.address} kind={b.name.kind} size={16} />
+                  <span className="label">{b.name.label}</span>
+                  <span className="amt mono">{formatDYL(b.amount)} DYL</span>
+                  <button className="linkish" onClick={() => unstake(b.address, b.amount)} disabled={busy}>
+                    unstake
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
         {msg && <div className={`wallet-msg ${msg.kind}`}>{msg.text}</div>}
 
         {activity.length > 0 && (
@@ -202,11 +303,14 @@ export function Wallet({
               {activity.map((t) => {
                 const out = t.from === wallet.address
                 const other = out ? t.to : t.from
+                const verb = t.kind === 'delegate' ? 'staked' : t.kind === 'undelegate' ? 'unstaked' : out ? 'sent' : 'got'
                 return (
                   <li key={t.hash}>
-                    <span className={out ? 'dir out' : 'dir in'}>{out ? 'sent' : 'got'}</span>
+                    <span className={out ? 'dir out' : 'dir in'}>{verb}</span>
                     <span className="amt mono">{formatDYL(t.amount)} DYL</span>
-                    <span className="faint">{out ? 'to' : 'from'}</span>
+                    <span className="faint">
+                      {t.kind === 'delegate' || t.kind === 'undelegate' ? '·' : out ? 'to' : 'from'}
+                    </span>
                     <span className="who">
                       <Avatar addr={other} kind={names(other).kind} size={14} />
                       <span className="label">{names(other).label}</span>

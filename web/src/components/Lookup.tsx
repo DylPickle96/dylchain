@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Name, State } from '../api'
+import type { AccountInfo } from '../api'
 import { formatDYL, getAccount, isAddress, shortHash } from '../api'
 import { Avatar, Copy, Icon, Who } from './bits'
 
@@ -58,7 +59,7 @@ function AccountView({
   names: (addr: string) => Name
   onLookup: (q: string) => void
 }) {
-  const [acct, setAcct] = useState<{ balance: number; nonce: number } | null>(null)
+  const [acct, setAcct] = useState<AccountInfo | null>(null)
   const [err, setErr] = useState<string | null>(null)
   // Re-fetch on every block so the balance tracks the chain. The component
   // is keyed on the address by its parent, so state resets on a new lookup.
@@ -101,13 +102,35 @@ function AccountView({
         <span className="v mono">{acct ? acct.nonce : '…'}</span>
         {validator && (
           <>
-            <span className="k">stake</span>
-            <span className="v mono">{formatDYL(validator.stake)} DYL</span>
+            <span className="k">bonded</span>
+            <span className="v mono">
+              {formatDYL(validator.stake)} DYL
+              {validator.delegated > 0 && (
+                <span className="faint"> ({formatDYL(validator.delegated)} delegated)</span>
+              )}
+            </span>
             <span className="k">blocks proposed</span>
             <span className="v mono">{validator.proposed.toLocaleString('en-US')}</span>
           </>
         )}
       </div>
+
+      {acct?.delegations && Object.keys(acct.delegations).length > 0 && (
+        <>
+          <div className="detail-label">Staked</div>
+          <ul className="txlist">
+            {Object.entries(acct.delegations)
+              .sort((a, b) => b[1] - a[1])
+              .map(([v, amount]) => (
+                <li key={v}>
+                  <Who addr={v} name={names(v)} size={16} onClick={onLookup} />
+                  <span className="amt mono">{formatDYL(amount)} DYL</span>
+                </li>
+              ))}
+          </ul>
+        </>
+      )}
+
       <div className="detail-label">Recent transfers</div>
       {txs.length === 0 ? (
         <div className="detail-sub">None in the recent feed.</div>

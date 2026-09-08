@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 export type Validator = {
   moniker: string
   address: string
-  stake: number
+  stake: number // effective weight: self-stake + delegations, 0 while slashed
+  delegated: number // the delegated portion, shown even while slashed
   votingPower: number
   slashed: boolean
   proposed: number
@@ -20,6 +21,7 @@ export type BlockInfo = {
 export type TxInfo = {
   hash: string
   height: number
+  kind?: 'delegate' | 'undelegate' | ''
   from: string
   to: string
   amount: number
@@ -174,10 +176,18 @@ export const postFault = (index: number) => post('/fault', { index })
 export const postFaucet = (address: string) => post('/faucet', { address })
 export const postTx = (tx: unknown) => post('/tx', tx)
 
-export async function getAccount(address: string): Promise<{ balance: number; nonce: number }> {
+export type AccountInfo = {
+  balance: number
+  nonce: number
+  delegations: Record<string, number> | null // validator address -> bonded
+}
+
+export async function getAccount(address: string): Promise<AccountInfo> {
   const r = await fetch(`/account?address=${encodeURIComponent(address)}`)
   if (!r.ok) throw new Error(`/account ${r.status}`)
-  return r.json()
+  const a = (await r.json()) as AccountInfo
+  if (!a.delegations) a.delegations = null
+  return a
 }
 
 // useCluster polls /state every few seconds and treats a successful poll as

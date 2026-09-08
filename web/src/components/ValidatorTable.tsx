@@ -106,8 +106,9 @@ function Row({
             <span className="pct">{(v.votingPower * 100).toFixed(1)}%</span>
           </div>
         </td>
-        <td className="num dim" title={`${formatDYL(v.stake)} DYL`}>
+        <td className="num dim" title={`${formatDYL(v.stake)} DYL total${v.delegated ? `, ${formatDYL(v.delegated)} delegated` : ''}`}>
           {compactDYL(v.stake)}
+          {v.delegated > 0 && <span className="deleg-tag">+{compactDYL(v.delegated)}</span>}
         </td>
         <td className="num">{v.proposed.toLocaleString('en-US')}</td>
       </tr>
@@ -174,7 +175,12 @@ function Detail({
             <Copy text={v.address} />
           </div>
           <div className="detail-sub">
-            stake {formatDYL(v.stake)} DYL · {(v.votingPower * 100).toFixed(2)}% of voting power
+            {v.slashed
+              ? `${formatDYL(v.delegated)} DYL delegated, not counting while slashed`
+              : `${formatDYL(v.stake)} DYL bonded (${formatDYL(Math.max(0, v.stake - v.delegated))} self${
+                  v.delegated > 0 ? ` + ${formatDYL(v.delegated)} delegated` : ''
+                })`}{' '}
+            · {(v.votingPower * 100).toFixed(2)}% of voting power
           </div>
         </div>
       </div>

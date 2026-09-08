@@ -13,6 +13,7 @@ export type Wallet = {
 }
 
 export type SignedTx = {
+  Kind?: string
   From: string
   To: string
   Amount: number
@@ -53,13 +54,18 @@ export function resetWallet(): Wallet {
 }
 
 // signableBytes mirrors chain/transaction.go exactly:
-//   From ‖ 0x00 ‖ To ‖ 0x00 ‖ Amount (8 bytes big-endian) ‖ Nonce (8 bytes big-endian)
-function signableBytes(from: string, to: string, amount: bigint, nonce: bigint): Uint8Array {
+//   Kind ‖ 0x00 ‖ From ‖ 0x00 ‖ To ‖ 0x00 ‖ Amount (8 bytes big-endian) ‖ Nonce (8 bytes big-endian)
+// Kind is "" for a transfer, "delegate" or "undelegate" for staking.
+function signableBytes(kind: string, from: string, to: string, amount: bigint, nonce: bigint): Uint8Array {
   const enc = new TextEncoder()
+  const k = enc.encode(kind)
   const f = enc.encode(from)
   const t = enc.encode(to)
-  const out = new Uint8Array(f.length + 1 + t.length + 1 + 16)
+  const out = new Uint8Array(k.length + 1 + f.length + 1 + t.length + 1 + 16)
   let o = 0
+  out.set(k, o)
+  o += k.length
+  out[o++] = 0
   out.set(f, o)
   o += f.length
   out[o++] = 0
@@ -78,14 +84,25 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(s)
 }
 
-// signTransfer builds and signs a transfer. amount is in udyl (base units).
-export function signTransfer(w: Wallet, to: string, amount: bigint, nonce: number): SignedTx {
-  const sig = ed25519.sign(signableBytes(w.address, to, amount, BigInt(nonce)), w.priv)
-  return {
+// sign builds and signs a transaction of the given kind. amount is in udyl
+// (base units). For a transfer, to is the recipient; for delegate and
+// undelegate, to is the validator.
+function sign(kind: '' | 'delegate' | 'undelegate', w: Wallet, to: string, amount: bigint, nonce: number): SignedTx {
+  const sig = ed25519.sign(signableBytes(kind, w.address, to, amount, BigInt(nonce)), w.priv)
+  const tx: SignedTx = {
     From: w.address,
     To: to,
     Amount: Number(amount),
     Nonce: nonce,
     Signature: toBase64(sig),
   }
+  if (kind) tx.Kind = kind
+  return tx
 }
+
+export const signTransfer = (w: Wallet, to: string, amount: bigint, nonce: number) =>
+  sign('', w, to, amount, nonce)
+export const signDelegate = (w: Wallet, validator: string, amount: bigint, nonce: number) =>
+  sign('delegate', w, validator, amount, nonce)
+export const signUndelegate = (w: Wallet, validator: string, amount: bigint, nonce: number) =>
+  sign('undelegate', w, validator, amount, nonce)

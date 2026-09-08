@@ -9,10 +9,22 @@ import (
 	"fmt"
 )
 
-// Transaction is a signed transfer of Amount base units from From to To.
-// Nonce is the sender's next expected sequence number, starting at zero.
-// Signature covers From, To, Amount, and Nonce, never itself.
+// Transaction kinds. The zero value is a plain transfer, so existing code
+// that builds a Transaction without naming a kind still means "transfer".
+const (
+	KindTransfer   = ""           // move Amount from From's balance to To's
+	KindDelegate   = "delegate"   // bond Amount of From's balance behind validator To
+	KindUndelegate = "undelegate" // unbond Amount from validator To back to From's balance
+)
+
+// Transaction is a signed operation on the ledger. For a transfer it moves
+// Amount base units from From to To. For delegate and undelegate, To is a
+// validator address and Amount moves between From's balance and its bond
+// behind that validator. Nonce is the sender's next sequence number,
+// starting at zero. Signature covers Kind, From, To, Amount, and Nonce,
+// never itself.
 type Transaction struct {
+	Kind      string `json:"Kind,omitempty"`
 	From      string `json:"From"`
 	To        string `json:"To"`
 	Amount    uint64 `json:"Amount"`
@@ -31,11 +43,14 @@ func (t Transaction) Sign(privateKey ed25519.PrivateKey) []byte {
 // plain concatenation, not JSON, so a browser wallet can reproduce it
 // exactly with a few lines:
 //
-//	From ‖ 0x00 ‖ To ‖ 0x00 ‖ Amount (8 bytes big-endian) ‖ Nonce (8 bytes big-endian)
+//	Kind ‖ 0x00 ‖ From ‖ 0x00 ‖ To ‖ 0x00 ‖ Amount (8 bytes big-endian) ‖ Nonce (8 bytes big-endian)
 //
-// The 0x00 separators keep ("ab","c") from colliding with ("a","bc").
+// The 0x00 separators keep ("ab","c") from colliding with ("a","bc"). Kind
+// is signed too, so a delegate cannot be replayed as a transfer.
 func (t Transaction) signableBytes() []byte {
-	b := make([]byte, 0, len(t.From)+len(t.To)+18)
+	b := make([]byte, 0, len(t.Kind)+len(t.From)+len(t.To)+19)
+	b = append(b, t.Kind...)
+	b = append(b, 0)
 	b = append(b, t.From...)
 	b = append(b, 0)
 	b = append(b, t.To...)

@@ -7,7 +7,9 @@ Context for resuming work. Not user-facing (see `README.md` for that).
 Stages 1 to 6 done (BFT consensus, happy path only). 7a: blocks mint a
 reward to their proposer. 7b: nodes catch a validator that double-votes.
 7c: a caught double-voter is slashed to zero stake, then auto-healed a set
-number of heights later so an unattended demo recovers. 7.5: measured, the
+number of heights later so an unattended demo recovers. 7d: delegate and
+undelegate transactions, stake-weighted rewards split with delegators,
+consensus weight re-read from state each height. 7.5: measured, the
 cluster already scales to ~200 validators, only the inbox buffer needed a
 fix. Stage 8a done (live-cluster primitives: RunContext, Snapshot, events). 8b done: cmd/dyld serves the live cluster over HTTP + SSE. Stage 9a done:
 the read-only explorer (block feed, validator table, event log). 9b done:
@@ -256,6 +258,61 @@ side `faulty` map, a healed validator hands its budget back and `/fault`
 opens up again on its own. `faultMu` serialises the check with
 `MakeFaulty` so two concurrent requests cannot both fit a budget only one
 of them does.
+
+## Stage 7d: delegation - done (the simplified version)
+
+Stake behind a validator, earn a cut of its blocks. The full path
+(unbonding queue, commission, slashing that burns delegator tokens,
+F1-style reward accumulator) was explicitly out of scope; this is the
+minimal version that still tells the story.
+
+- **Transaction gains `Kind`** (`""`, `"delegate"`, `"undelegate"`).
+  `signableBytes` prepends `Kind ‖ 0x00`, so a delegate cannot be replayed
+  as a transfer. Third change to the signing contract; `wallet.ts` matches.
+  `json:"Kind,omitempty"` keeps a transfer's `Hash` and Merkle leaf
+  byte-for-byte what they were.
+- **`State.Delegations`** is `delegator -> validator -> amount`. `delegate`
+  moves tokens from `Balances` into it; `undelegate` moves them back. Both
+  are still `Supply` (which now sums balances and delegations), so
+  delegate/undelegate is supply-neutral and minting stays monotonic.
+- **`Block.Validators`** (genesis only, `omitempty`) carries each
+  validator's genesis self-stake. `ReplayBlocks` reads it into an
+  unexported `State.validatorBase`, so `Apply` stays a pure function of
+  `(State, Block)` with no new parameters and the ~50 test call sites did
+  not move.
+- **Reward split** in `distributeReward`: `BlockReward` is divided between
+  the proposer's `validatorBase` weight and each delegator's bonded
+  amount, `mulDiv` at 128-bit width so `reward * stake` cannot overflow,
+  delegators sorted so the integer-division dust lands on the proposer
+  deterministically. Zero delegations reduces to "proposer takes all",
+  which is what the old one-liner did, so the minting tests are unchanged.
+- **Consensus weight from state.** `election` now holds `origStake`,
+  `delegated`, `slashed` per index; `effective(i)` is `0` if slashed else
+  `origStake+delegated`. The run loop calls `election.syncDelegations(state)`
+  after applying slashes/heals and before `runHeight`, so a delegate in
+  block `h` takes effect at `h+1` for every node at once. No scheduled
+  delay is needed the way a slash needs `slashDelay`: the change is already
+  in a committed block every node holds identically, so there is no
+  detection skew to absorb.
+- **Slashing does not burn delegations.** Burning would mean recording the
+  slash in a block (evidence-on-chain, the deferred "real design"), so
+  instead a slashed validator's delegations just stop counting in
+  `effective` and stop earning; the delegator can still `undelegate` them.
+  Weaker teeth, but it keeps `State` a pure replay of the blocks. The
+  slash-dodge (undelegate in the 2-block window) is therefore moot and,
+  per Dylan, not worth caring about for a demo.
+- **UI**: the wallet gets a "stake behind a validator" picker and an
+  unstake list; the validator table and account lookup show the delegated
+  portion; the tx feed labels delegate/undelegate rows; `/state` validators
+  carry `delegated`, `/account` carries `delegations`. The demo driver
+  delegates and undelegates small amounts from the four people so the
+  table shows live delegated stake without the user doing anything.
+
+Verified end to end in headless Chromium: a browser-signed delegate with
+the new `Kind` byte layout clears `Submit`, the bond shows up, the
+delegator's balance ticks up from the validator's blocks, and undelegate
+returns it. Every node's chain still `Validate`s (replay reproduces
+`Delegations`).
 
 ## Stage 7.5: scaling pass - done, mostly by measuring
 
