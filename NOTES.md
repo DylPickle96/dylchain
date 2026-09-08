@@ -20,7 +20,9 @@ pass (see the stage 9 section), verified in headless Chromium end to end.
 Stage 10 done: CI and a Dockerfile, mempool depth on `/state`, tx-hash
 search, a slash toast and cold-visitor hints, a browser-side Merkle
 inclusion proof, and `-data` persistence (keys.json + an append-only
-blocks.jsonl replayed on restart). README now has a screenshot.
+blocks.jsonl replayed on restart). README now has a screenshot. Stage 11
+done: `cmd/dylwasm` compiles the whole demo to js/wasm so the built site
+runs the chain in the page and needs no backend.
 
 Stage 6 tip:
 
@@ -560,6 +562,47 @@ A batch of the "nice to have" items, smallest first.
   touches disk and behaviour is exactly as before.
 - **README screenshot** at `docs/screenshot.png`, a 2x capture of the
   explorer mid-slash with the wallet staked.
+
+## Stage 11: the chain in the browser
+
+A Cloudflare Workers deploy of the static build broke, because there is no
+Go backend on a static host. Rather than deploy `dyld` somewhere and point
+the page at it, `cmd/dylwasm` compiles the whole thing to `js/wasm`.
+
+- **`cmd/dylwasm/main.go`** is the chain library plus a trimmed copy of
+  `cmd/dyld`'s demo glue (the six demo accounts, the traffic driver, the
+  fault budget, the faucet cool-off, the seen list), minus HTTP. It puts
+  `dylState`, `dylAccount`, `dylSubmitTx`, `dylFaucet`, `dylFault`,
+  `dylProof` on the JS global and pushes events through an `__dylEvent`
+  callback instead of SSE. Two wasm rules it follows: `main` never returns
+  (`select{}`), or every binding dies; and a `js.Func` handler never
+  blocks, which is fine because every cluster method it calls (`Submit`,
+  `Snapshot`, `Account`, `MakeFaulty`) only takes a mutex briefly. Twelve
+  validators, not twenty, and `PaceBlocks(1s)`, so each height's O(n^2)
+  signature burst on the one wasm thread is ~20 ms, not a freeze. About
+  4 MB, 1.2 MB gzipped; the `demo` glue was not extracted into a shared
+  package, so it is a copy that could drift, a deliberate trade to keep
+  `cmd/dyld` and its tests untouched.
+- **`web/src/api.ts`** grew a backend switch on `VITE_BACKEND`. `http`
+  (the old code) is the default for `npm run dev` via `.env.development`
+  and for the Docker image via `npm run build:http`. A plain `npm run
+  build` runs `scripts/build-wasm.sh` and defaults to `wasm`: `useCluster`
+  dynamically imports `wasm.ts`, waits for `__dylReady`, then polls
+  `dylState()` on a 1.5 s timer and on every pushed event. Every other
+  component is unchanged.
+- **`web/src/wasm.ts`** instantiates `dyl.wasm` with Go's `wasm_exec.js`
+  (a classic script in `index.html`, not a module) and resolves on the
+  `__dylReady` callback, not on `go.run()`, which never resolves.
+- `wasm_exec.js` is committed (stable across Go patches, and the http
+  build's `index.html` still references it); `dyl.wasm` is gitignored and
+  built in CI, which also compiles the `js/wasm` target and runs both web
+  builds. `web/wrangler.jsonc` points Workers assets at `dist/` with SPA
+  fallback.
+
+Verified in headless Chromium against the static `dist/` on a bare file
+server: boots in ~300 ms, runs consensus in the page, and faucet, staking,
+tx-hash lookup, the inclusion proof and fault-then-slash all work with no
+backend. The `http` build still works served by `dyld`.
 
 ## Parked design questions
 

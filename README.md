@@ -29,9 +29,10 @@ unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 ## Layout
 
 ```
-chain/     the chain library, package chain, imported as dyl/chain
-cmd/dyld/  the demo server: runs a live cluster, serves HTTP + SSE
-web/       the explorer UI and burner wallet, React + Vite
+chain/       the chain library, package chain, imported as dyl/chain
+cmd/dyld/    the demo server: runs a live cluster, serves HTTP + SSE
+cmd/dylwasm/ the same demo compiled to js/wasm, so it runs in a browser tab
+web/         the explorer UI and burner wallet, React + Vite
 ```
 
 `chain/` is one Go package split by concern:
@@ -256,15 +257,18 @@ in-memory version from letting two nodes disagree on a height.
 
 ## Running the demo
 
-```
-go run ./cmd/dyld              # API only on :8080
-```
-
-Or as one container that bundles the built UI:
+Three ways, depending on whether you want a real multi-goroutine server or
+just the page:
 
 ```
-docker build -t dyl . && docker run -p 8080:8080 dyl
+go run ./cmd/dyld                                   # the server, API on :8080
+docker build -t dyl . && docker run -p 8080:8080 dyl # server + UI in a container
+cd web && npm run build && npm run preview           # standalone, chain runs in the tab
 ```
+
+The first two run the cluster in a Go process and serve it over HTTP + SSE.
+The third builds `cmd/dylwasm` and needs no backend at all; that is what a
+static host like Cloudflare serves.
 
 `go run` boots a 20-validator cluster with named validators on a skewed stake curve
 (the largest holds about 13%, the set bonds about 1M DYL in total), produces
@@ -299,9 +303,20 @@ a directory.
 ```
 cd web
 npm install
-npm run dev     # dev server on :5173, proxies the API to :8080
-npm run build   # writes web/dist for go run ./cmd/dyld to serve
+npm run dev        # :5173, talks to a local dyld on :8080 (VITE_BACKEND=http)
+npm run build      # standalone: bundles the chain as wasm, needs no server
+npm run build:http # wired to a dyld that serves web/dist itself
 ```
+
+The build has two backends. `build:http` is the explorer talking to a
+`dyld` server over HTTP and SSE, which is what `npm run dev` and the Docker
+image use. A plain `build` instead compiles `cmd/dylwasm` to WebAssembly
+and runs the whole cluster, consensus and all, inside the page, so the
+output is fully static and deploys anywhere. `web/wrangler.jsonc` is set up
+for Cloudflare Workers assets; the wasm binary is about 4 MB, roughly
+1.2 MB gzipped. `scripts/build-wasm.sh` writes `dyl.wasm` and Go's
+`wasm_exec.js` into `web/public/`. Either way the React code is identical:
+`api.ts` picks the backend from `VITE_BACKEND`.
 
 The page is a small explorer. A stat strip shows height and block time,
 transactions with a per-block sparkline and the mempool depth, circulating
