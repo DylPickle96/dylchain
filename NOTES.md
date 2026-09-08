@@ -17,6 +17,10 @@ the browser burner wallet (localStorage ed25519 key, client-side signing,
 faucet and send). Audit finding 15 fixed alongside 9b: the static handler
 now hides dotfiles and refuses directory listings. 9c done: the polish
 pass (see the stage 9 section), verified in headless Chromium end to end.
+Stage 10 done: CI and a Dockerfile, mempool depth on `/state`, tx-hash
+search, a slash toast and cold-visitor hints, a browser-side Merkle
+inclusion proof, and `-data` persistence (keys.json + an append-only
+blocks.jsonl replayed on restart). README now has a screenshot.
 
 Stage 6 tip:
 
@@ -513,6 +517,49 @@ Verification: no Chrome on this Mac, so Playwright's headless Chromium was
 installed into the session scratchpad and driven through the whole story
 (faucet, browser-signed send, fault injection, slash) with screenshots.
 Nothing of that lives in the repo.
+
+## Stage 10: rounding it out
+
+A batch of the "nice to have" items, smallest first.
+
+- **CI and a Dockerfile.** `.github/workflows/ci.yml` runs gofmt, vet,
+  `go test -race` and, in a second job, the web lint/typecheck/build. The
+  Dockerfile is node build then go build then a distroless image serving
+  both on `:8080`. `go-version-file: go.mod`, so it tracks whatever the
+  module declares (1.26.3 at time of writing; if CI can't resolve that,
+  pin `go-version` instead). No Docker on this Mac, so the image was not
+  built here.
+- **Mempool depth.** `Snapshot.Pending` from `mempool.Len()`, shown in the
+  stat strip and the tx-feed header, so the submit-to-commit gap is
+  visible.
+- **Transaction-hash search.** `Lookup` recognises a 64-hex hash and shows
+  the transaction from the recent feed; every hash on the page links to it.
+- **Slash toast + hints.** `Toasts` watches the event stream and pops a
+  slash/heal notice bottom-right. The validators header and the power-bar
+  legend now say to open a validator for the fault button. The stake form
+  notes that yield is proportional to stake, so the choice is about trust.
+- **Merkle inclusion proof.** `Block.InclusionProof` / `VerifyInclusionProof`
+  exported; `GET /proof?height=&hash=` serves the sibling path for a recent
+  block (`Cluster.fullBlocks` keeps the last `recentTxs` non-empty blocks
+  whole under `c.mu`, so any hash the tx feed still shows can be proven);
+  `web/src/merkle.ts` folds the leaf to the root in the browser with noble
+  `sha256`. Cross-checked against the server for single- and multi-tx
+  blocks.
+- **Persistence (`-data <dir>`).** `keys.json` holds ed25519 seeds for the
+  faucet, demo accounts and validators; `blocks.jsonl` is one JSON `Block`
+  per line, appended in `Cluster.OnCommit` with a buffered write + flush
+  (no fsync; a process crash keeps it, only a machine crash risks the last
+  few). On start, `ResumeCluster` replays the log onto every node.
+  `node.run` was starting at height 1 unconditionally, which made a
+  resumed node try to re-propose block 1 and halt; it now starts at
+  `tip.Height + 1`. The `election` accumulator starts fresh on resume, so
+  all nodes agree with each other from the resume height even though the
+  sequence differs from a from-genesis run. Slash/heal state is not in the
+  blocks, so a validator slashed before a restart is back in the set: fine
+  for a demo, noted in the README's Known gaps. Without `-data` nothing
+  touches disk and behaviour is exactly as before.
+- **README screenshot** at `docs/screenshot.png`, a 2x capture of the
+  explorer mid-slash with the wallet staked.
 
 ## Parked design questions
 

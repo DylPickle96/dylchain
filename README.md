@@ -9,6 +9,8 @@ production use.
 The native coin is **DYL**. Balances and amounts are counts of its base
 unit, `udyl`, where 1 DYL is 10^6 `udyl`.
 
+![The dyl explorer: validator table, burner wallet, and a slash landing](docs/screenshot.png)
+
 ## Status
 
 | Stage | Concept | State |
@@ -98,11 +100,11 @@ block header, including `TxRoot`, not the raw transaction slice. An empty
 block has an all-zero root.
 
 A full node already has every transaction, so `AddBlock` and `Validate`
-only recompute the root. `merkleProof` / `verifyMerkleProof` let a light
-client check that one transaction is in a block from the leaf hash, a
-sibling path, and `TxRoot`, without the rest of the body. They are
-unexported until something outside this package needs them. Odd layers
-put a copy of the last node into the proof as its sibling, so verify
+only recompute the root. `Block.InclusionProof` / `VerifyInclusionProof`
+let a light client check that one transaction is in a block from the leaf
+hash, a sibling path, and `TxRoot`, without the rest of the body; the
+explorer calls the first over HTTP and does the second in the browser. Odd
+layers put a copy of the last node into the proof as its sibling, so verify
 orders hashes by index parity and does not need the leaf count.
 
 ## How a block is added
@@ -248,7 +250,9 @@ in-memory version from letting two nodes disagree on a height.
   blocks waiting for it. Nothing in a single process stalls a proposer, so
   round changes are not built.
 - Slash evidence lives in node memory, not in a block, so a chain replayed
-  from its blocks alone would not apply the slash (see Faults).
+  from its blocks alone would not apply the slash (see Faults). The
+  persistent server's block log therefore comes back with every validator
+  un-slashed after a restart.
 
 ## Running the demo
 
@@ -270,10 +274,11 @@ serves an API on `:8080`:
 
 | Route | |
 |-------|-|
-| `GET /state` | genesis time, height, supply, recent blocks and transactions, validators, demo accounts, seen addresses |
+| `GET /state` | genesis time, height, supply, mempool depth, block reward, faucet grant, recent blocks and transactions, validators (with delegated stake), demo accounts, seen addresses |
 | `GET /events` | Server-Sent Events: one frame per block, slash, heal, and node halt |
-| `GET /account?address=` | balance and next nonce |
-| `POST /tx` | a signed `Transaction` as JSON |
+| `GET /account?address=` | balance, next nonce, and what the address has delegated |
+| `GET /proof?height=N&hash=` | Merkle inclusion proof for one transaction in a recent block |
+| `POST /tx` | a signed `Transaction` as JSON, transfer or `delegate` / `undelegate` |
 | `POST /faucet` | `{"address": "..."}`, funds it from the faucet |
 | `POST /fault` | `{"index": N}`, makes validator N double-vote; 409 if that would slash a third of stake |
 
@@ -281,9 +286,13 @@ A faulted validator is slashed, then restored a couple of minutes later, so
 the fault budget frees up again and an unattended demo does not degrade.
 
 Flags: `-validators`, `-addr`, `-block-time`, `-tx-every`, `-heal-after`
-(heights between a slash and its recovery, 0 to keep slashes permanent). It
-serves the built UI from `web/dist` when that exists, otherwise just the
-API. That static handler hides dotfiles and will not list a directory.
+(heights between a slash and its recovery, 0 to keep slashes permanent), and
+`-data <dir>`. With `-data` the server keeps ed25519 seeds in `keys.json`
+and an append-only `blocks.jsonl`, and replays the log on restart, so the
+chain and every visitor's balance survive a redeploy. Without it everything
+is in memory. It serves the built UI from `web/dist` when that exists,
+otherwise just the API; the static handler hides dotfiles and will not list
+a directory.
 
 ## The explorer and wallet
 
@@ -294,15 +303,17 @@ npm run dev     # dev server on :5173, proxies the API to :8080
 npm run build   # writes web/dist for go run ./cmd/dyld to serve
 ```
 
-The page is a small explorer. A stat strip shows height, block time, a
-transactions-per-block sparkline, circulating supply with the minted total,
-and bonded stake. The validator table sits under a stacked voting-power bar
-with the ⅓ and ⅔ consensus thresholds marked. Open a validator to see which
-recent blocks it proposed and a button that makes it double-vote, watch the
-slash arrive in the event log two blocks later, and watch it rejoin the set
-a few minutes after that. Block and transaction feeds update live, blocks
-expand to list their transactions, and the search box looks up any address
-or recent block height.
+The page is a small explorer. A stat strip shows height and block time,
+transactions with a per-block sparkline and the mempool depth, circulating
+supply with the minted total, and bonded stake. The validator table sits
+under a stacked voting-power bar with the ⅓ and ⅔ consensus thresholds
+marked. Open a validator to see which recent blocks it proposed and a
+button that makes it double-vote; a toast and the event log show the slash
+land two blocks later, and it rejoins the set a few minutes after that.
+Block and transaction feeds update live and expand for detail. The search
+box takes an address, a block height, or a transaction hash, and a
+transaction view has a button that fetches a Merkle proof and folds it back
+to the block root in the browser.
 
 It also holds a burner wallet: an ed25519 key pair generated in the browser
 and kept in `localStorage`. Visitors fund it from the faucet, send DYL to
