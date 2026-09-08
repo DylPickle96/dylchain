@@ -56,10 +56,13 @@ export type ClusterEvent = {
 export const UDYL = 1_000_000
 
 // formatDYL renders a base-unit count as a DYL amount, trimming trailing
-// zeros. It mirrors coin.go's FormatAmount.
+// zeros. It mirrors coin.go's FormatAmount. A non-finite input renders as
+// "0" rather than leaking "NaN" into the page.
 export function formatDYL(base: number, maxFrac = 6): string {
-  const whole = Math.floor(base / UDYL)
-  const frac = base % UDYL
+  if (!Number.isFinite(base)) return '0'
+  const n = Math.max(0, Math.floor(base))
+  const whole = Math.floor(n / UDYL)
+  const frac = n % UDYL
   const w = whole.toLocaleString('en-US')
   if (frac === 0) return w
   const f = String(frac).padStart(6, '0').slice(0, maxFrac).replace(/0+$/, '')
@@ -68,6 +71,7 @@ export function formatDYL(base: number, maxFrac = 6): string {
 
 // compactDYL renders large amounts as 1.2M / 340K, small ones in full.
 export function compactDYL(base: number): string {
+  if (!Number.isFinite(base)) return '0'
   const dyl = base / UDYL
   if (dyl >= 1_000_000) return `${(dyl / 1_000_000).toFixed(2)}M`
   if (dyl >= 10_000) return `${(dyl / 1_000).toFixed(1)}K`
@@ -88,6 +92,7 @@ export function isAddress(s: string): boolean {
 
 // age renders how long ago a unix-seconds timestamp was.
 export function age(unixSeconds: number): string {
+  if (!Number.isFinite(unixSeconds)) return ''
   const s = Math.max(0, Math.round(Date.now() / 1000 - unixSeconds))
   if (s < 5) return 'just now'
   if (s < 60) return `${s}s ago`
@@ -98,6 +103,7 @@ export function age(unixSeconds: number): string {
 
 // duration renders a span of seconds as 3d 4h, 12m, 45s.
 export function duration(seconds: number): string {
+  if (!Number.isFinite(seconds)) return ''
   const s = Math.max(0, Math.floor(seconds))
   const d = Math.floor(s / 86400)
   const h = Math.floor((s % 86400) / 3600)
@@ -147,7 +153,11 @@ export function hue(addr: string): number {
 export async function getState(signal?: AbortSignal): Promise<State> {
   const r = await fetch('/state', { signal })
   if (!r.ok) throw new Error(`/state ${r.status}`)
-  return r.json()
+  const s = (await r.json()) as State
+  // Tolerate an older server that does not send these yet.
+  if (!Number.isFinite(s.blockReward)) s.blockReward = UDYL
+  if (!Number.isFinite(s.faucetGrant)) s.faucetGrant = 100 * UDYL
+  return s
 }
 
 async function post(path: string, body: unknown): Promise<string | null> {
