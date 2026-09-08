@@ -253,10 +253,16 @@ in-memory version from letting two nodes disagree on a height.
 ## Running the demo
 
 ```
-go run ./cmd/dyld
+go run ./cmd/dyld              # API only on :8080
 ```
 
-Boots a 20-validator cluster with named validators on a skewed stake curve
+Or as one container that bundles the built UI:
+
+```
+docker build -t dyl . && docker run -p 8080:8080 dyl
+```
+
+`go run` boots a 20-validator cluster with named validators on a skewed stake curve
 (the largest holds about 13%, the set bonds about 1M DYL in total), produces
 a block a second, and keeps a set of demo accounts (a treasury, an exchange,
 and four people) trading in the background so the chain is never idle. It
